@@ -185,7 +185,7 @@ function mapForecast(
 
 export function predictTimeAware(left: TeamProfile, right: TeamProfile, killsLine: number | null = null, durationLine: number | null = null) {
   const factors: PredictionFactor[] = [
-    { name: "Recency-weighted win rate", edge: scaledEdge(left.winRate, right.winRate, 0.2), weight: 0.2 },
+    { name: "Recency-weighted win rate", edge: scaledEdge(left.winRate, right.winRate, 0.2), weight: 0.18 },
     { name: "Recent 45-day form", edge: scaledEdge(left.recentWinRate, right.recentWinRate, 0.25), weight: 0.12 },
     { name: "Gold diff @15", edge: scaledEdge(left.gd15, right.gd15, 1200), weight: 0.14 },
     { name: "XP diff @15", edge: scaledEdge(left.xp15, right.xp15, 1000), weight: 0.09 },
@@ -206,7 +206,7 @@ export function predictTimeAware(left: TeamProfile, right: TeamProfile, killsLin
   const sampleConfidence = Math.min(1, effectiveGames / 25);
   const rosterConfidence = Math.min(1, Math.min(left.rosterGames, right.rosterGames) / 25);
   const patchConfidence = Math.min(1, Math.min(left.patchPlayerGames, right.patchPlayerGames) / 15);
-  const confidence = activeWeight * sampleConfidence * (0.7 + 0.2 * rosterConfidence + 0.1 * patchConfidence);
+  const confidence = Math.min(1, activeWeight * sampleConfidence * (0.7 + 0.2 * rosterConfidence + 0.1 * patchConfidence));
   const calibratedScore = rawScore * 2.1 * Math.max(0.4, confidence);
   const probabilityA = 1 / (1 + Math.exp(-calibratedScore));
   return {

@@ -28,7 +28,7 @@ const authorized = (request: Request, env: Env) =>
   !!env.IMPORT_TOKEN && request.headers.get("authorization") === `Bearer ${env.IMPORT_TOKEN}`;
 
 async function currentPatch(db: D1Database) {
-  return db.prepare("SELECT patch,played_at playedAt FROM matches WHERE patch IS NOT NULL AND patch<>'' ORDER BY played_at DESC LIMIT 1").first<{ patch: string; playedAt: string | null }>();
+  return db.prepare("SELECT patch,played_at playedAt FROM matches WHERE source_game_id LIKE 'oracle:%' AND played_at>='2022-01-01' AND patch IS NOT NULL AND patch<>'' ORDER BY played_at DESC LIMIT 1").first<{ patch: string; playedAt: string | null }>();
 }
 
 async function teamProfile(db: D1Database, id: number, patch: string | null, referenceDate: Date) {
@@ -38,7 +38,7 @@ async function teamProfile(db: D1Database, id: number, patch: string | null, ref
     .prepare(
       `SELECT p.player_name name,MAX(p.role) role,COUNT(*) games
        FROM player_game_stats p JOIN matches m ON m.id=p.match_id
-       WHERE p.team_id=? GROUP BY p.player_name ORDER BY MAX(m.played_at) DESC,COUNT(*) DESC LIMIT 5`,
+       WHERE p.team_id=? AND m.source_game_id LIKE 'oracle:%' AND m.played_at>='2022-01-01' GROUP BY p.player_name ORDER BY MAX(m.played_at) DESC,COUNT(*) DESC LIMIT 5`,
     )
     .bind(id)
     .all<RosterDbRow>();
@@ -48,7 +48,7 @@ async function teamProfile(db: D1Database, id: number, patch: string | null, ref
       `SELECT s.match_id matchId,m.played_at playedAt,m.patch,s.side,s.won,s.kills,s.deaths,s.assists,
         m.duration_seconds durationSeconds,s.gold_diff_15 goldDiff15,s.xp_diff_15 xpDiff15,s.cs_diff_15 csDiff15,s.first_blood firstBlood,
         s.first_tower firstTower,s.dragons,s.barons,s.vision_score_per_minute vision
-       FROM team_game_stats s JOIN matches m ON m.id=s.match_id WHERE s.team_id=? ORDER BY m.played_at DESC`,
+       FROM team_game_stats s JOIN matches m ON m.id=s.match_id WHERE s.team_id=? AND m.source_game_id LIKE 'oracle:%' AND m.played_at>='2022-01-01' ORDER BY m.played_at DESC`,
     )
     .bind(id)
     .all<TeamGameDbRow>();
@@ -57,7 +57,7 @@ async function teamProfile(db: D1Database, id: number, patch: string | null, ref
     ? db.prepare(
         `SELECT p.match_id matchId,p.player_name playerName,m.played_at playedAt,m.patch,s.won,p.kills,p.deaths,p.assists,p.champion
          FROM player_game_stats p JOIN matches m ON m.id=p.match_id JOIN team_game_stats s ON s.match_id=p.match_id AND s.team_id=p.team_id
-         WHERE p.team_id=? AND p.player_name IN (${roster.map(() => "?").join(",")})`,
+         WHERE p.team_id=? AND p.player_name IN (${roster.map(() => "?").join(",")}) AND m.source_game_id LIKE 'oracle:%' AND m.played_at>='2022-01-01'`,
       ).bind(id, ...roster.map((player) => player.name))
     : db.prepare("SELECT NULL matchId,NULL playerName,NULL playedAt,NULL patch,NULL won,NULL kills,NULL deaths,NULL assists,NULL champion WHERE 0");
   const { results: playerRows = [] } = await playerStatement.all<PlayerGameDbRow>();
@@ -161,16 +161,16 @@ export default {
   async fetch(request: Request, env: Env) {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/api/admin/oracle/")) return handleOracleAdmin(request, env, url.pathname);
-    if (url.pathname === "/api/health") return json({ ok: true, source: "Oracle's Elixir", coverage: "2020+" });
+    if (url.pathname === "/api/health") return json({ ok: true, source: "Oracle's Elixir", coverage: "2022+" });
     if (url.pathname === "/api/import/status") {
       const { results } = await env.DB
         .prepare("SELECT source_year,status,source_hash,rows_received,rows_rejected,games_received,games_skipped,last_error,source_url,started_at,completed_at FROM oracle_import_runs ORDER BY source_year DESC")
         .all();
-      return json({ source: "Oracle's Elixir", coverage: "2020+", imports: results });
+      return json({ source: "Oracle's Elixir", coverage: "2022+", imports: results });
     }
     if (url.pathname === "/api/teams") {
       const { results } = await env.DB
-        .prepare("SELECT t.id,t.name,COUNT(s.match_id) games FROM teams t JOIN team_game_stats s ON s.team_id=t.id GROUP BY t.id,t.name HAVING games>0 ORDER BY t.name")
+        .prepare("SELECT t.id,t.name,COUNT(s.match_id) games FROM teams t JOIN team_game_stats s ON s.team_id=t.id JOIN matches m ON m.id=s.match_id WHERE m.source_game_id LIKE 'oracle:%' AND m.played_at>='2022-01-01' GROUP BY t.id,t.name HAVING games>0 ORDER BY t.name")
         .all();
       return json(results);
     }
