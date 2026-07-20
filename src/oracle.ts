@@ -1,0 +1,11 @@
+export type OracleRow = Record<string, string>;
+export type NormalizedOracleRow = { gameId: string; isTeamRow: boolean; league: string | null; date: string | null; patch: string | null; side: "blue" | "red"; team: string; player: string | null; role: string | null; champion: string | null; result: number; kills: number | null; deaths: number | null; assists: number | null; cs: number | null; goldDiff15: number | null; xpDiff15: number | null; csDiff15: number | null; firstBlood: number | null; firstTower: number | null; dragons: number | null; barons: number | null; heralds: number | null; towers: number | null };
+const value=(row:OracleRow,...keys:string[])=>keys.map(key=>row[key]).find(v=>v!==undefined&&v!=="")??null;
+const number=(row:OracleRow,...keys:string[])=>{const raw=value(row,...keys);const parsed=raw===null?NaN:Number(raw);return Number.isFinite(parsed)?parsed:null;};
+export function normalizeOracleRow(row:OracleRow):NormalizedOracleRow|null{
+  const gameId=value(row,"gameid","game_id"),side=value(row,"side")?.toLowerCase(),team=value(row,"teamname","team");
+  if(!gameId||!team||(side!=="blue"&&side!=="red"))return null;
+  const result=number(row,"result");if(result!==0&&result!==1)return null;
+  const participant=number(row,"participantid","participant_id");
+  return {gameId,isTeamRow:participant===100||participant===200,league:value(row,"league"),date:value(row,"date","game_date"),patch:value(row,"patch"),side,team,player:value(row,"playername","player"),role:value(row,"position","role"),champion:value(row,"champion"),result,kills:number(row,"kills"),deaths:number(row,"deaths"),assists:number(row,"assists"),cs:number(row,"total_cs","cs"),goldDiff15:number(row,"golddiffat15","gold_diff_15"),xpDiff15:number(row,"xpdiffat15","xp_diff_15"),csDiff15:number(row,"csdiffat15","cs_diff_15"),firstBlood:number(row,"firstblood"),firstTower:number(row,"firsttower"),dragons:number(row,"dragons"),barons:number(row,"barons"),heralds:number(row,"heralds"),towers:number(row,"towers")};
+}

@@ -17,16 +17,15 @@ The deployed Worker serves the static dashboard and the `/api/teams` and `/api/m
 
 The migration stores tournaments, teams, individual matches, team game stats, player game stats, and picks/bans. This avoids Excel row limits and supports rebuilding team aggregates from the raw match-level facts.
 
-## Historical import
+## Historical import: Oracle’s Elixir
 
-The project includes a conservative Gol.gg import queue for the public tournament and game pages. It performs at most one source request per minute, stores only normalized data in D1, and retries failures up to three times. It is disabled by default.
+Historical match data comes from Oracle’s Elixir bulk CSV files, processed remotely by a GitHub Actions workflow and written in batches to D1. Your laptop is not used for the download or import.
 
-After applying the second migration and deploying, enable it with:
+1. Apply migrations and deploy the Worker.
+2. Create a strong random `IMPORT_TOKEN` secret in Cloudflare with `npx.cmd wrangler secret put IMPORT_TOKEN`.
+3. Add GitHub repository secrets:
+   - `ORACLE_IMPORT_URL`: your Worker URL, for example `https://lol-stats-predictor.example.workers.dev`
+   - `ORACLE_IMPORT_TOKEN`: the same token.
+4. In GitHub, open **Actions → Import Oracle's Elixir season → Run workflow**. Enter a year and the direct Oracle’s Elixir CSV URL.
 
-```powershell
-npx.cmd wrangler secret put IMPORT_ENABLED
-```
-
-Enter `true` when prompted. Check progress at `/api/import/status`. To pause, run the same command again and enter `false`.
-
-The initial importer discovers every season, tournament, series and individual game, and stores tournament/team/match metadata. Detailed player, draft, objective and lane-stat parsing will be added in later importer versions rather than guessing when a source layout changes.
+The workflow supports batches of 250 source rows and records progress at `/api/import/status`. It imports available fields only; blank source fields remain blank and are excluded from the prediction weighting.
