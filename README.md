@@ -39,6 +39,10 @@ The predictor does not treat every historical game equally.
 - **Player and champion form:** current-roster KDA and current-patch player win rate are independent model factors. This uses the champions those active players actually played on the current patch, without assuming future draft picks.
 - **Transparent factors:** recency-weighted win rate and recent form, 15-minute gold/XP/CS differences, roster continuity, roster KDA, patch form, early objectives, vision, and side results are shown with their weights.
 
+## Map forecasts
+
+Each matchup also includes separate map-level estimates for total kills and game duration. These are calculated from the same roster-, patch-, and recency-weighted completed maps used by each team. The two team distributions are blended, then the site shows an expected value, a typical middle range, and an over/under probability for the lines entered in the dashboard. These forecasts are descriptive probabilities, not guarantees or betting advice.
+
 The displayed data-coverage confidence measures usable recent/roster/patch sample size and available inputs. It is not a guarantee and is not the probability that the selected team wins.
 
 ## Stored data and prediction safety

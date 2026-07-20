@@ -46,7 +46,7 @@ async function teamProfile(db: D1Database, id: number, patch: string | null, ref
   const { results: gameRows = [] } = await db
     .prepare(
       `SELECT s.match_id matchId,m.played_at playedAt,m.patch,s.side,s.won,s.kills,s.deaths,s.assists,
-        s.gold_diff_15 goldDiff15,s.xp_diff_15 xpDiff15,s.cs_diff_15 csDiff15,s.first_blood firstBlood,
+        m.duration_seconds durationSeconds,s.gold_diff_15 goldDiff15,s.xp_diff_15 xpDiff15,s.cs_diff_15 csDiff15,s.first_blood firstBlood,
         s.first_tower firstTower,s.dragons,s.barons,s.vision_score_per_minute vision
        FROM team_game_stats s JOIN matches m ON m.id=s.match_id WHERE s.team_id=? ORDER BY m.played_at DESC`,
     )
@@ -178,12 +178,18 @@ export default {
       const leftId = Number(url.searchParams.get("teamA"));
       const rightId = Number(url.searchParams.get("teamB"));
       if (!Number.isInteger(leftId) || !Number.isInteger(rightId) || leftId === rightId) return json({ error: "Select two distinct teams." }, 400);
+      const requestedLine = (key: string, minimum: number, maximum: number) => {
+        const value = Number(url.searchParams.get(key));
+        return Number.isFinite(value) && value >= minimum && value <= maximum ? value : null;
+      };
+      const killsLine = requestedLine("killsLine", 1, 100);
+      const durationLine = requestedLine("durationLine", 10, 90);
       const latest = await currentPatch(env.DB);
       const patch = latest?.patch ?? null;
       const referenceDate = latest?.playedAt ? new Date(`${latest.playedAt.replace(" ", "T")}Z`) : new Date();
       const [left, right] = await Promise.all([teamProfile(env.DB, leftId, patch, referenceDate), teamProfile(env.DB, rightId, patch, referenceDate)]);
       if (!left || !right) return json({ error: "Both teams need imported Oracle's Elixir statistics." }, 404);
-      const prediction = predictTimeAware(left, right);
+      const prediction = predictTimeAware(left, right, killsLine, durationLine);
       return json({
         teamA: left.name,
         teamB: right.name,

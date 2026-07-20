@@ -7,6 +7,7 @@ export type TeamGame = {
   kills: number | null;
   deaths: number | null;
   assists: number | null;
+  durationSeconds: number | null;
   goldDiff15: number | null;
   xpDiff15: number | null;
   csDiff15: number | null;
@@ -55,6 +56,10 @@ export type TeamProfile = {
   vision: number | null;
   sideWinRate: number | null;
   rosterContinuity: number | null;
+  totalKills: number | null;
+  totalKillsDeviation: number | null;
+  durationMinutes: number | null;
+  durationDeviation: number | null;
 };
 
 export type PredictionFactor = { name: string; edge: number | null; weight: number };
@@ -78,6 +83,19 @@ function weightedAverage(values: Array<[number | null, number]>) {
     weight += itemWeight;
   }
   return weight ? total / weight : null;
+}
+
+function weightedDistribution(values: Array<[number | null, number]>) {
+  const mean = weightedAverage(values);
+  if (mean === null) return { mean: null, deviation: null };
+  let total = 0;
+  let weight = 0;
+  for (const [value, itemWeight] of values) {
+    if (value === null || !Number.isFinite(value) || itemWeight <= 0) continue;
+    total += (value - mean) ** 2 * itemWeight;
+    weight += itemWeight;
+  }
+  return { mean, deviation: weight ? Math.sqrt(total / weight) : null };
 }
 
 function gameWeight(game: TeamGame, currentPatch: string | null, rosterSize: number, now: Date) {
@@ -112,6 +130,8 @@ export function profileTeam(
   const continuity = weightedAverage(weighted.map(([game, weight]) => [rosterSize ? Math.min(1, game.rosterOverlap / rosterSize) : null, weight]));
   const effectiveGames = weighted.reduce((sum, [, weight]) => sum + weight, 0);
   const lastGameAt = games.map((game) => game.playedAt).filter((date): date is string => !!date).sort().at(-1) ?? null;
+  const killsDistribution = weightedDistribution(weighted.map(([game, weight]) => [game.kills === null || game.deaths === null ? null : game.kills + game.deaths, weight]));
+  const durationDistribution = weightedDistribution(weighted.map(([game, weight]) => [game.durationSeconds === null ? null : game.durationSeconds / 60, weight]));
 
   return {
     id, name, games: games.length, effectiveGames, recentGames: recent.length, currentPatch, lastGameAt, roster,
@@ -124,6 +144,8 @@ export function profileTeam(
     dragons: value((game) => game.dragons), barons: value((game) => game.barons), vision: value((game) => game.vision),
     sideWinRate: sideRates[0] === null || sideRates[1] === null ? null : (sideRates[0] + sideRates[1]) / 2,
     rosterContinuity: continuity,
+    totalKills: killsDistribution.mean, totalKillsDeviation: killsDistribution.deviation,
+    durationMinutes: durationDistribution.mean, durationDeviation: durationDistribution.deviation,
   };
 }
 
@@ -131,7 +153,37 @@ function scaledEdge(left: number | null, right: number | null, scale: number) {
   return left === null || right === null ? null : clamp((left - right) / scale);
 }
 
-export function predictTimeAware(left: TeamProfile, right: TeamProfile) {
+function normalCdf(value: number) {
+  const sign = value < 0 ? -1 : 1;
+  const z = Math.abs(value) / Math.sqrt(2);
+  const t = 1 / (1 + 0.3275911 * z);
+  const erf = 1 - (((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-z * z));
+  return 0.5 * (1 + sign * erf);
+}
+
+function mapForecast(
+  leftMean: number | null,
+  rightMean: number | null,
+  leftDeviation: number | null,
+  rightDeviation: number | null,
+  line: number | null,
+  floor: number,
+) {
+  if (leftMean === null || rightMean === null) return null;
+  const expected = (leftMean + rightMean) / 2;
+  const deviation = Math.max(floor, Math.sqrt(((leftDeviation ?? floor) ** 2 + (rightDeviation ?? floor) ** 2) / 2));
+  const lineProbability = line === null ? null : 1 - normalCdf((line - expected) / deviation);
+  return {
+    expected,
+    typicalLow: expected - 0.67449 * deviation,
+    typicalHigh: expected + 0.67449 * deviation,
+    line,
+    probabilityOverLine: lineProbability,
+    probabilityUnderLine: lineProbability === null ? null : 1 - lineProbability,
+  };
+}
+
+export function predictTimeAware(left: TeamProfile, right: TeamProfile, killsLine: number | null = null, durationLine: number | null = null) {
   const factors: PredictionFactor[] = [
     { name: "Recency-weighted win rate", edge: scaledEdge(left.winRate, right.winRate, 0.2), weight: 0.2 },
     { name: "Recent 45-day form", edge: scaledEdge(left.recentWinRate, right.recentWinRate, 0.25), weight: 0.12 },
@@ -157,5 +209,11 @@ export function predictTimeAware(left: TeamProfile, right: TeamProfile) {
   const confidence = activeWeight * sampleConfidence * (0.7 + 0.2 * rosterConfidence + 0.1 * patchConfidence);
   const calibratedScore = rawScore * 2.1 * Math.max(0.4, confidence);
   const probabilityA = 1 / (1 + Math.exp(-calibratedScore));
-  return { probabilityA, probabilityB: 1 - probabilityA, factors, activeWeight, confidence };
+  return {
+    probabilityA, probabilityB: 1 - probabilityA, factors, activeWeight, confidence,
+    mapForecasts: {
+      totalKills: mapForecast(left.totalKills, right.totalKills, left.totalKillsDeviation, right.totalKillsDeviation, killsLine, 4),
+      duration: mapForecast(left.durationMinutes, right.durationMinutes, left.durationDeviation, right.durationDeviation, durationLine, 3),
+    },
+  };
 }
