@@ -4,6 +4,8 @@
   "main": "src/worker.ts",
   "compatibility_date": "2026-07-20",
   "assets": { "directory": "./public", "binding": "ASSETS" },
+  "triggers": { "crons": ["* * * * *"] },
+  "vars": { "IMPORT_ENABLED": "false" },
   "d1_databases": [
     {
       "binding": "DB",

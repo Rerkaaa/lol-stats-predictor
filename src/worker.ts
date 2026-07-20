@@ -1,62 +1,21 @@
-export interface Env {
-  DB: D1Database;
-  ASSETS: Fetcher;
-}
+export interface Env { DB: D1Database; ASSETS: Fetcher; IMPORT_ENABLED: string; }
+type TeamRow = { id:number; name:string; games:number; wins:number; win_rate:number; gd15:number; xp15:number; cs15:number; kd:number; first_blood:number; first_tower:number; vision:number; blue_rate:number; red_rate:number };
+type ImportJob = { id:number; kind:"season"|"tournament"|"series"|"game"; source_key:string; source_url:string; tournament_id:number|null };
+const json=(value:unknown,status=200)=>new Response(JSON.stringify(value),{status,headers:{"content-type":"application/json","cache-control":"public, max-age=300"}});
+const sourceHeaders={"user-agent":"LoLStatsPredictor/0.1 (personal statistics project; low-rate importer)",accept:"text/html,application/json"};
+const clean=(value:string)=>value.replace(/&amp;/g,"&").replace(/&#39;/g,"'").replace(/<[^>]*>/g,"").trim();
+const gol=(path:string)=>`https://gol.gg${path.startsWith("/")?path:`/${path}`}`;
 
-type TeamRow = { id: number; name: string; games: number; wins: number; win_rate: number; gd15: number; xp15: number; cs15: number; kd: number; first_blood: number; first_tower: number; dragon_rate: number; baron_rate: number; vision: number; blue_rate: number; red_rate: number };
+async function teamStats(db:D1Database,teamId:number):Promise<TeamRow|null>{return db.prepare(`SELECT t.id,t.name,COUNT(s.match_id) games,SUM(s.won) wins,AVG(s.won) win_rate,AVG(s.gold_diff_15) gd15,AVG(s.xp_diff_15) xp15,AVG(s.cs_diff_15) cs15,AVG(s.kills-s.deaths) kd,AVG(s.first_blood) first_blood,AVG(s.first_tower) first_tower,AVG(s.vision_score_per_minute) vision,AVG(CASE WHEN s.side='blue' THEN s.won END) blue_rate,AVG(CASE WHEN s.side='red' THEN s.won END) red_rate FROM teams t JOIN team_game_stats s ON s.team_id=t.id WHERE t.id=? GROUP BY t.id,t.name`).bind(teamId).first<TeamRow>();}
+function edge(a:number|null,b:number|null){return a==null||b==null?null:(a-b)/(Math.abs(a)+Math.abs(b)+(a===0||b===0?1:0));}
+function probability(a:TeamRow,b:TeamRow){const metrics=[["Win rate",a.win_rate,b.win_rate,.25],["Gold diff @15",a.gd15,b.gd15,.16],["XP diff @15",a.xp15,b.xp15,.10],["CS diff @15",a.cs15,b.cs15,.08],["Kill-death diff",a.kd,b.kd,.12],["First blood",a.first_blood,b.first_blood,.08],["First tower",a.first_tower,b.first_tower,.07],["Vision / min",a.vision,b.vision,.06],["Blue/red side",((a.blue_rate??0)+(a.red_rate??0))/2,((b.blue_rate??0)+(b.red_rate??0))/2,.08]] as const;const factors=metrics.map(([name,av,bv,weight])=>({name,edge:edge(av,bv),weight}));const activeWeight=factors.reduce((sum,x)=>sum+(x.edge==null?0:x.weight),0);const score=activeWeight?factors.reduce((sum,x)=>sum+(x.edge==null?0:x.edge*x.weight/activeWeight),0)*2.4:0;const probabilityA=1/(1+Math.exp(-score));return{teamA:a.name,teamB:b.name,probabilityA,probabilityB:1-probabilityA,confidence:Math.min(1,Math.min(a.games,b.games)/20)*activeWeight,activeWeight,factors};}
 
-const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json", "cache-control": "public, max-age=300" } });
+async function enqueue(db:D1Database,kind:ImportJob["kind"],key:string,url:string,tournamentId:number|null=null){await db.prepare("INSERT OR IGNORE INTO import_jobs(kind,source_key,source_url,tournament_id) VALUES(?,?,?,?)").bind(kind,key,url,tournamentId).run();}
+async function seed(db:D1Database){const existing=await db.prepare("SELECT COUNT(*) count FROM import_jobs").first<{count:number}>();if(existing?.count)return;for(let season=3;season<=16;season++)await enqueue(db,"season",`season:S${season}`,`https://gol.gg/tournament/ajax.trlist.php?season=S${season}`);}
+async function importSeason(db:D1Database,job:ImportJob){const res=await fetch(job.source_url,{headers:sourceHeaders});if(!res.ok)throw Error(`Gol.gg returned ${res.status}`);const rows=await res.json() as Array<{trname:string;region?:string;nbgames?:number;firstgame?:string;lastgame?:string}>;const season=/S\d+/.exec(job.source_key)?.[0]??null;for(const row of rows){if(!row.trname)continue;const url=gol(`/tournament/tournament-matchlist/${encodeURIComponent(row.trname)}/`);await db.prepare("INSERT OR IGNORE INTO tournaments(gol_slug,name,season,region,games_count,first_game_date,last_game_date,source_url) VALUES(?,?,?,?,?,?,?,?)").bind(row.trname,row.trname,season,row.region??null,row.nbgames??null,row.firstgame??null,row.lastgame??null,url).run();const tournament=await db.prepare("SELECT id FROM tournaments WHERE gol_slug=?").bind(row.trname).first<{id:number}>();if(tournament)await enqueue(db,"tournament",`tournament:${row.trname}`,url,tournament.id);}}
+async function importTournament(db:D1Database,job:ImportJob){const res=await fetch(job.source_url,{headers:sourceHeaders});if(!res.ok)throw Error(`Gol.gg returned ${res.status}`);const html=await res.text();for(const link of html.matchAll(/href=['"]\.\.\/game\/stats\/(\d+)\/page-(summary|game)\//g)){const kind=link[2]==="summary"?"series":"game";await enqueue(db,kind,`${kind}:${link[1]}`,gol(`/game/stats/${link[1]}/page-${link[2]}/`),job.tournament_id);}}
+async function importSeries(db:D1Database,job:ImportJob){const res=await fetch(job.source_url,{headers:sourceHeaders});if(!res.ok)throw Error(`Gol.gg returned ${res.status}`);for(const link of (await res.text()).matchAll(/href=['"]\.\.\/game\/stats\/(\d+)\/page-game\//g))await enqueue(db,"game",`game:${link[1]}`,gol(`/game/stats/${link[1]}/page-game/`),job.tournament_id);}
+async function importGame(db:D1Database,job:ImportJob){const res=await fetch(job.source_url,{headers:sourceHeaders});if(!res.ok)throw Error(`Gol.gg returned ${res.status}`);const html=await res.text(),gameId=Number(/game:(\d+)/.exec(job.source_key)?.[1]);const teams=[...html.matchAll(/teams\/team-stats\/(\d+)\/[^'"]*['"][^>]*>([^<]+)</g)].slice(0,2).map(m=>({golId:Number(m[1]),name:clean(m[2])}));if(!gameId||teams.length!==2||!teams[0].name||!teams[1].name)throw Error("Could not identify teams; source layout may have changed.");for(const team of teams)await db.prepare("INSERT OR IGNORE INTO teams(gol_id,name,source_url) VALUES(?,?,?)").bind(team.golId,team.name,gol(`/teams/team-stats/${team.golId}/split-ALL/tournament-ALL/`)).run();const ids=await Promise.all(teams.map(t=>db.prepare("SELECT id FROM teams WHERE gol_id=?").bind(t.golId).first<{id:number}>()));const duration=/<h1>(\d+):(\d+)<\/h1>/.exec(html);await db.prepare("INSERT OR IGNORE INTO matches(gol_game_id,tournament_id,blue_team_id,red_team_id,duration_seconds,source_url) VALUES(?,?,?,?,?,?)").bind(gameId,job.tournament_id,ids[0]?.id??null,ids[1]?.id??null,duration?Number(duration[1])*60+Number(duration[2]):null,job.source_url).run();}
+async function runImport(env:Env){if(env.IMPORT_ENABLED!=="true")return;await seed(env.DB);const job=await env.DB.prepare("SELECT id,kind,source_key,source_url,tournament_id FROM import_jobs WHERE status='pending' ORDER BY id LIMIT 1").first<ImportJob>();if(!job)return;await env.DB.prepare("UPDATE import_jobs SET status='running',attempts=attempts+1 WHERE id=?").bind(job.id).run();try{if(job.kind==="season")await importSeason(env.DB,job);else if(job.kind==="tournament")await importTournament(env.DB,job);else if(job.kind==="series")await importSeries(env.DB,job);else await importGame(env.DB,job);await env.DB.prepare("UPDATE import_jobs SET status='complete',completed_at=CURRENT_TIMESTAMP,last_error=NULL WHERE id=?").bind(job.id).run();}catch(error){await env.DB.prepare("UPDATE import_jobs SET status=CASE WHEN attempts>=3 THEN 'failed' ELSE 'pending' END,last_error=? WHERE id=?").bind(String(error).slice(0,500),job.id).run();}}
 
-async function teamStats(db: D1Database, teamId: number): Promise<TeamRow | null> {
-  return db.prepare(`
-    SELECT t.id, t.name, COUNT(s.match_id) games, SUM(s.won) wins,
-      AVG(s.won) win_rate, AVG(s.gold_diff_15) gd15, AVG(s.xp_diff_15) xp15,
-      AVG(s.cs_diff_15) cs15, AVG(s.kills - s.deaths) kd,
-      AVG(s.first_blood) first_blood, AVG(s.first_tower) first_tower,
-      AVG(s.dragons) / NULLIF(AVG(s.dragons) + AVG(CASE WHEN s.dragons IS NOT NULL THEN 1 END), 0) dragon_rate,
-      AVG(s.barons) / NULLIF(AVG(s.barons) + AVG(CASE WHEN s.barons IS NOT NULL THEN 1 END), 0) baron_rate,
-      AVG(s.vision_score_per_minute) vision,
-      AVG(CASE WHEN s.side='blue' THEN s.won END) blue_rate,
-      AVG(CASE WHEN s.side='red' THEN s.won END) red_rate
-    FROM teams t JOIN team_game_stats s ON s.team_id=t.id
-    WHERE t.id=? GROUP BY t.id, t.name
-  `).bind(teamId).first<TeamRow>();
-}
-
-function edge(a: number | null, b: number | null) {
-  if (a == null || b == null) return null;
-  return (a - b) / (Math.abs(a) + Math.abs(b) + (a === 0 || b === 0 ? 1 : 0));
-}
-
-function probability(a: TeamRow, b: TeamRow) {
-  const metrics = [
-    ["Win rate", a.win_rate, b.win_rate, 0.25], ["Gold diff @15", a.gd15, b.gd15, 0.16],
-    ["XP diff @15", a.xp15, b.xp15, 0.10], ["CS diff @15", a.cs15, b.cs15, 0.08],
-    ["Kill-death diff", a.kd, b.kd, 0.12], ["First blood", a.first_blood, b.first_blood, 0.08],
-    ["First tower", a.first_tower, b.first_tower, 0.07], ["Vision / min", a.vision, b.vision, 0.06],
-    ["Blue/red side", ((a.blue_rate ?? 0) + (a.red_rate ?? 0)) / 2, ((b.blue_rate ?? 0) + (b.red_rate ?? 0)) / 2, 0.08]
-  ] as const;
-  const supported = metrics.map(([name, av, bv, weight]) => ({ name, edge: edge(av, bv), weight }));
-  const activeWeight = supported.reduce((sum, x) => sum + (x.edge == null ? 0 : x.weight), 0);
-  const score = activeWeight ? supported.reduce((sum, x) => sum + (x.edge == null ? 0 : x.edge * x.weight / activeWeight), 0) * 2.4 : 0;
-  return { teamA: a.name, teamB: b.name, probabilityA: 1 / (1 + Math.exp(-score)), probabilityB: 1 - 1 / (1 + Math.exp(-score)), confidence: Math.min(1, Math.min(a.games, b.games) / 20) * activeWeight, activeWeight, factors: supported };
-}
-
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-    if (url.pathname === "/api/health") return json({ ok: true });
-    if (url.pathname === "/api/teams") {
-      const { results } = await env.DB.prepare("SELECT id, name, region FROM teams ORDER BY name").all();
-      return json(results);
-    }
-    if (url.pathname === "/api/matchup") {
-      const a = Number(url.searchParams.get("teamA")); const b = Number(url.searchParams.get("teamB"));
-      if (!Number.isInteger(a) || !Number.isInteger(b) || a === b) return json({ error: "Select two different teams." }, 400);
-      const [teamA, teamB] = await Promise.all([teamStats(env.DB, a), teamStats(env.DB, b)]);
-      if (!teamA || !teamB) return json({ error: "Both teams need imported game statistics." }, 404);
-      return json(probability(teamA, teamB));
-    }
-    return env.ASSETS.fetch(request);
-  }
-} satisfies ExportedHandler<Env>;
+export default {async fetch(request:Request,env:Env):Promise<Response>{const url=new URL(request.url);if(url.pathname==="/api/health")return json({ok:true});if(url.pathname==="/api/import/status"){const {results}=await env.DB.prepare("SELECT status,COUNT(*) count FROM import_jobs GROUP BY status ORDER BY status").all();return json({enabled:env.IMPORT_ENABLED==="true",jobs:results});}if(url.pathname==="/api/teams"){const {results}=await env.DB.prepare("SELECT id,name,region FROM teams ORDER BY name").all();return json(results);}if(url.pathname==="/api/matchup"){const a=Number(url.searchParams.get("teamA")),b=Number(url.searchParams.get("teamB"));if(!Number.isInteger(a)||!Number.isInteger(b)||a===b)return json({error:"Select two different teams."},400);const [teamA,teamB]=await Promise.all([teamStats(env.DB,a),teamStats(env.DB,b)]);if(!teamA||!teamB)return json({error:"Both teams need imported game statistics."},404);return json(probability(teamA,teamB));}return env.ASSETS.fetch(request);},async scheduled(_controller:ScheduledController,env:Env,ctx:ExecutionContext){ctx.waitUntil(runImport(env));}} satisfies ExportedHandler<Env>;

@@ -17,6 +17,16 @@ The deployed Worker serves the static dashboard and the `/api/teams` and `/api/m
 
 The migration stores tournaments, teams, individual matches, team game stats, player game stats, and picks/bans. This avoids Excel row limits and supports rebuilding team aggregates from the raw match-level facts.
 
-## Import policy
+## Historical import
 
-The historical importer has deliberately not been included yet: it needs to be rate-limited, resumable, and validated against Gol.gg's permitted access patterns before collection begins. The initial import should be batched to respect Cloudflare D1's daily write allowance.
+The project includes a conservative Gol.gg import queue for the public tournament and game pages. It performs at most one source request per minute, stores only normalized data in D1, and retries failures up to three times. It is disabled by default.
+
+After applying the second migration and deploying, enable it with:
+
+```powershell
+npx.cmd wrangler secret put IMPORT_ENABLED
+```
+
+Enter `true` when prompted. Check progress at `/api/import/status`. To pause, run the same command again and enter `false`.
+
+The initial importer discovers every season, tournament, series and individual game, and stores tournament/team/match metadata. Detailed player, draft, objective and lane-stat parsing will be added in later importer versions rather than guessing when a source layout changes.
