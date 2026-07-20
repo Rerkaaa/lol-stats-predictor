@@ -7,12 +7,8 @@ on:
         description: "Season year. Leave blank to use the current Europe/Tirane year."
         required: false
         type: string
-      source_url:
-        description: "Optional direct CSV URL. Leave blank to resolve the public Oracle Drive folder."
-        required: false
-        type: string
       max_games:
-        description: "Optional safety limit for a test or phased historical import. Leave blank for all changed games."
+        description: "Safety limit for a test or phased import. Enter 2 for a test, 1500 for a backfill chunk, or leave blank for all changed games."
         required: false
         type: string
   schedule:
@@ -46,7 +42,6 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_YEAR: ${{ inputs.year }}
-          INPUT_SOURCE_URL: ${{ inputs.source_url }}
           ORACLE_MAX_GAMES: ${{ inputs.max_games }}
           ORACLE_IMPORT_URL: ${{ secrets.ORACLE_IMPORT_URL }}
           ORACLE_IMPORT_TOKEN: ${{ secrets.ORACLE_IMPORT_TOKEN }}
@@ -61,8 +56,7 @@ jobs:
           else
             YEAR="$INPUT_YEAR"
             if [[ -z "$YEAR" ]]; then YEAR="$(node scripts/current-oracle-year.mjs)"; fi
-            SOURCE_URL="$INPUT_SOURCE_URL"
-            if [[ -z "$SOURCE_URL" ]]; then SOURCE_URL="$(node scripts/resolve-oracle-drive-file.mjs "$YEAR")"; fi
+            SOURCE_URL="$(node scripts/resolve-oracle-drive-file.mjs "$YEAR")"
           fi
           echo "Importing Oracle's Elixir season $YEAR"
           node scripts/import-oracle.mjs "$YEAR" "$SOURCE_URL"

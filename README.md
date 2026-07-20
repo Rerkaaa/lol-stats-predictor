@@ -22,9 +22,9 @@ The daily run hashes the CSV first. If the source file is unchanged, it exits wi
 
 In GitHub, open **Actions -> Sync Oracle's Elixir data -> Run workflow**.
 
-- Leave both inputs blank to import the current year from the public Drive folder.
-- Enter a year (for example `2020`) and leave the URL blank to resolve that year's file from the folder.
-- Supply a direct CSV URL only when intentionally using a different public source.
+- Leave the year blank to import the current year from the public Drive folder.
+- Enter a year (for example `2020`) to import that year's CSV from the folder.
+- The workflow always resolves the CSV from the configured public Oracle Drive folder.
 - Set **max_games** only for a small test or deliberately phased backfill; leave it blank for the complete changed-game set.
 
 Run historical years one at a time. The import is idempotent: restarting a failed year safely skips already-versioned games and updates only missing or changed ones.
