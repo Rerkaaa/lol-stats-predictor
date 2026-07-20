@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "lol-stats-predictor",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-07-20",
+  "assets": { "directory": "./public", "binding": "ASSETS" },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "lol-stats-db",
+      "database_id": "50499ae8-c0d0-47fc-b4c1-ac269bbd9f1d",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
