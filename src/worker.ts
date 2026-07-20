@@ -15,8 +15,10 @@ type PlayerGameDbRow = PlayerGame & { matchId: number; playerName: string };
 type RecentMapRow = {
   matchId: number; playedAt: string | null; stage: string | null; patch: string | null; durationSeconds: number | null;
   blueTeamId: number; blueTeam: string; redTeamId: number; redTeam: string; winnerTeamId: number | null;
-  blueKills: number | null; redKills: number | null;
+  blueKills: number | null; redKills: number | null; blueDragons: number | null; redDragons: number | null;
+  blueBarons: number | null; redBarons: number | null; blueTowers: number | null; redTowers: number | null;
 };
+type RecentPlayerRow = { matchId: number; teamId: number; playerName: string; role: string | null; champion: string | null; kills: number | null; deaths: number | null; assists: number | null; cs: number | null; gold: number | null; damage: number | null; visionScore: number | null };
 
 type StartImportBody = { year?: number; sourceUrl?: string; sourceHash?: string };
 type ChangedGamesBody = StartImportBody & { games?: Array<{ gameId?: string; sourceHash?: string }> };
@@ -81,13 +83,22 @@ async function latestSeries(db: D1Database) {
   const { results = [] } = await db.prepare(
     `SELECT m.id matchId,m.played_at playedAt,m.stage,m.patch,m.duration_seconds durationSeconds,
       m.blue_team_id blueTeamId,blue.name blueTeam,m.red_team_id redTeamId,red.name redTeam,m.winner_team_id winnerTeamId,
-      blue_stats.kills blueKills,red_stats.kills redKills
+      blue_stats.kills blueKills,red_stats.kills redKills,blue_stats.dragons blueDragons,red_stats.dragons redDragons,
+      blue_stats.barons blueBarons,red_stats.barons redBarons,blue_stats.towers blueTowers,red_stats.towers redTowers
      FROM matches m JOIN teams blue ON blue.id=m.blue_team_id JOIN teams red ON red.id=m.red_team_id
      LEFT JOIN team_game_stats blue_stats ON blue_stats.match_id=m.id AND blue_stats.team_id=m.blue_team_id
      LEFT JOIN team_game_stats red_stats ON red_stats.match_id=m.id AND red_stats.team_id=m.red_team_id
      WHERE m.source_game_id LIKE 'oracle:%' AND m.played_at>='2022-01-01'
-     ORDER BY m.played_at DESC,m.id DESC LIMIT 120`,
+     ORDER BY m.played_at DESC,m.id DESC LIMIT 80`,
   ).all<RecentMapRow>();
+  if (!results.length) return [];
+  const { results: playerRows = [] } = await db.prepare(
+    `SELECT match_id matchId,team_id teamId,player_name playerName,role,champion,kills,deaths,assists,cs,gold,damage,vision_score visionScore
+     FROM player_game_stats WHERE match_id IN (${results.map(() => "?").join(",")})
+     ORDER BY match_id,team_id,role`,
+  ).bind(...results.map((map) => map.matchId)).all<RecentPlayerRow>();
+  const playersByMatch = new Map<number, RecentPlayerRow[]>();
+  for (const player of playerRows) (playersByMatch.get(player.matchId) ?? playersByMatch.set(player.matchId, []).get(player.matchId)).push(player);
   const groups = new Map<string, RecentMapRow[]>();
   for (const map of results) {
     const date = map.playedAt?.slice(0, 10) ?? "unknown-date";
@@ -106,7 +117,12 @@ async function latestSeries(db: D1Database) {
       playedAt: chronological.at(-1)?.playedAt ?? null, competition: first.stage ?? "Unknown competition",
       teamA: { name: first.blueTeam, score: scores.get(first.blueTeamId) ?? 0 },
       teamB: { name: first.redTeam, score: scores.get(first.redTeamId) ?? 0 },
-      maps: chronological.map((map, index) => ({ number: index + 1, patch: map.patch, durationSeconds: map.durationSeconds, blueTeam: map.blueTeam, redTeam: map.redTeam, blueKills: map.blueKills, redKills: map.redKills, winner: map.winnerTeamId === map.blueTeamId ? map.blueTeam : map.winnerTeamId === map.redTeamId ? map.redTeam : null })),
+      maps: chronological.map((map, index) => ({
+        number: index + 1, patch: map.patch, durationSeconds: map.durationSeconds, blueTeam: map.blueTeam, redTeam: map.redTeam,
+        blueKills: map.blueKills, redKills: map.redKills, winner: map.winnerTeamId === map.blueTeamId ? map.blueTeam : map.winnerTeamId === map.redTeamId ? map.redTeam : null,
+        objectives: { blue: { dragons: map.blueDragons, barons: map.blueBarons, towers: map.blueTowers }, red: { dragons: map.redDragons, barons: map.redBarons, towers: map.redTowers } },
+        players: (playersByMatch.get(map.matchId) ?? []).map((player) => ({ ...player, team: player.teamId === map.blueTeamId ? "blue" : "red" })),
+      })),
     };
   }).sort((left, right) => String(right.playedAt).localeCompare(String(left.playedAt))).slice(0, 12);
 }
