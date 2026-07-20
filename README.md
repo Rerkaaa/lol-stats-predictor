@@ -14,7 +14,7 @@ No CSV is downloaded to the laptop. GitHub Actions downloads public Oracle's Eli
 
 ## Automated data refresh
 
-The workflow resolves files from the public Oracle Drive folder and refreshes the current Europe/Tirane year every day at approximately 00:01 local time. Two UTC schedules handle daylight-saving changes; the run outside the local midnight hour exits without importing.
+The workflow resolves files from the public Oracle Drive folder every day at approximately 00:01 Europe/Tirane time. It automatically backfills the newest unfinished year first: 2026, then 2025, continuing down to 2020. Each scheduled backfill is capped at 1,500 changed games. Once every year is complete, the same daily workflow returns to refreshing the current year.
 
 The daily run hashes the CSV first. If the source file is unchanged, it exits without parsing or writing data. If the file changed, it compares per-game hashes and writes only new or updated games.
 

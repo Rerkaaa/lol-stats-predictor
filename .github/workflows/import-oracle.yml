@@ -51,12 +51,13 @@ jobs:
               echo "Not the Europe/Tirane midnight run; nothing to do."
               exit 0
             fi
-            YEAR="$(node scripts/current-oracle-year.mjs)"
+            YEAR="$(node scripts/next-oracle-import-year.mjs)"
             SOURCE_URL="$(node scripts/resolve-oracle-drive-file.mjs "$YEAR")"
+            ORACLE_MAX_GAMES="${ORACLE_MAX_GAMES:-1500}"
           else
             YEAR="$INPUT_YEAR"
             if [[ -z "$YEAR" ]]; then YEAR="$(node scripts/current-oracle-year.mjs)"; fi
             SOURCE_URL="$(node scripts/resolve-oracle-drive-file.mjs "$YEAR")"
           fi
-          echo "Importing Oracle's Elixir season $YEAR"
+          echo "Importing Oracle's Elixir season $YEAR (limit: ${ORACLE_MAX_GAMES:-all} changed games)"
           node scripts/import-oracle.mjs "$YEAR" "$SOURCE_URL"
