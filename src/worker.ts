@@ -1,5 +1,6 @@
 import { ingestOracleGames } from "./oracle-ingest";
 import type { OracleGamePayload } from "./oracle";
+import { predictTimeAware, profileTeam, type PlayerGame, type RosterPlayer, type TeamGame } from "./prediction";
 
 export interface Env {
   DB: D1Database;
@@ -7,24 +8,10 @@ export interface Env {
   IMPORT_TOKEN?: string;
 }
 
-type TeamStats = {
-  id: number;
-  name: string;
-  games: number;
-  wins: number;
-  winRate: number;
-  gd15: number | null;
-  xp15: number | null;
-  cs15: number | null;
-  kda: number | null;
-  firstBlood: number | null;
-  firstTower: number | null;
-  dragons: number | null;
-  barons: number | null;
-  vision: number | null;
-  blueRate: number | null;
-  redRate: number | null;
-};
+type TeamRow = { id: number; name: string };
+type RosterDbRow = { name: string; role: string | null; games: number };
+type TeamGameDbRow = Omit<TeamGame, "rosterOverlap">;
+type PlayerGameDbRow = PlayerGame & { matchId: number; playerName: string };
 
 type StartImportBody = { year?: number; sourceUrl?: string; sourceHash?: string };
 type ChangedGamesBody = StartImportBody & { games?: Array<{ gameId?: string; sourceHash?: string }> };
@@ -40,45 +27,49 @@ const validStart = (body: StartImportBody) => Number.isInteger(body.year) && (bo
 const authorized = (request: Request, env: Env) =>
   !!env.IMPORT_TOKEN && request.headers.get("authorization") === `Bearer ${env.IMPORT_TOKEN}`;
 
-async function stats(db: D1Database, id: number) {
-  return db
+async function currentPatch(db: D1Database) {
+  return db.prepare("SELECT patch,played_at playedAt FROM matches WHERE patch IS NOT NULL AND patch<>'' ORDER BY played_at DESC LIMIT 1").first<{ patch: string; playedAt: string | null }>();
+}
+
+async function teamProfile(db: D1Database, id: number, patch: string | null, referenceDate: Date) {
+  const team = await db.prepare("SELECT id,name FROM teams WHERE id=?").bind(id).first<TeamRow>();
+  if (!team) return null;
+  const { results: rosterRows = [] } = await db
     .prepare(
-      `SELECT t.id,t.name,COUNT(s.match_id) games,SUM(s.won) wins,AVG(s.won) winRate,
-        AVG(s.gold_diff_15) gd15,AVG(s.xp_diff_15) xp15,AVG(s.cs_diff_15) cs15,
-        AVG(CAST(s.kills+s.assists AS REAL)/NULLIF(s.deaths,0)) kda,AVG(s.first_blood) firstBlood,
-        AVG(s.first_tower) firstTower,AVG(s.dragons) dragons,AVG(s.barons) barons,
-        AVG(s.vision_score_per_minute) vision,AVG(CASE WHEN s.side='blue' THEN s.won END) blueRate,
-        AVG(CASE WHEN s.side='red' THEN s.won END) redRate
-       FROM teams t JOIN team_game_stats s ON s.team_id=t.id WHERE t.id=? GROUP BY t.id,t.name`,
+      `SELECT p.player_name name,MAX(p.role) role,COUNT(*) games
+       FROM player_game_stats p JOIN matches m ON m.id=p.match_id
+       WHERE p.team_id=? GROUP BY p.player_name ORDER BY MAX(m.played_at) DESC,COUNT(*) DESC LIMIT 5`,
     )
     .bind(id)
-    .first<TeamStats>();
-}
-
-function relative(left: number | null, right: number | null) {
-  return left === null || right === null ? null : (left - right) / (Math.abs(left) + Math.abs(right) + 1);
-}
-
-function predict(left: TeamStats, right: TeamStats) {
-  const fields: [string, number | null, number | null, number][] = [
-    ["Win rate", left.winRate, right.winRate, 0.25],
-    ["Gold diff @15", left.gd15, right.gd15, 0.18],
-    ["XP diff @15", left.xp15, right.xp15, 0.12],
-    ["CS diff @15", left.cs15, right.cs15, 0.08],
-    ["KDA", left.kda, right.kda, 0.1],
-    ["First blood", left.firstBlood, right.firstBlood, 0.07],
-    ["First tower", left.firstTower, right.firstTower, 0.06],
-    ["Dragons / game", left.dragons, right.dragons, 0.05],
-    ["Barons / game", left.barons, right.barons, 0.04],
-    ["Vision / min", left.vision, right.vision, 0.03],
-    ["Side win rate", ((left.blueRate ?? 0) + (left.redRate ?? 0)) / 2, ((right.blueRate ?? 0) + (right.redRate ?? 0)) / 2, 0.02],
-  ];
-  const factors = fields.map(([name, leftValue, rightValue, weight]) => ({ name, edge: relative(leftValue, rightValue), weight }));
-  const available = factors.filter((factor) => factor.edge !== null);
-  const activeWeight = available.reduce((total, factor) => total + factor.weight, 0);
-  const score = activeWeight ? available.reduce((total, factor) => total + (factor.edge ?? 0) * factor.weight / activeWeight, 0) * 2.8 : 0;
-  const probabilityA = 1 / (1 + Math.exp(-score));
-  return { teamA: left.name, teamB: right.name, probabilityA, probabilityB: 1 - probabilityA, confidence: Math.min(1, Math.min(left.games, right.games) / 30) * activeWeight, activeWeight, factors };
+    .all<RosterDbRow>();
+  const roster: RosterPlayer[] = rosterRows.map((row) => ({ name: row.name, role: row.role, games: Number(row.games) }));
+  const { results: gameRows = [] } = await db
+    .prepare(
+      `SELECT s.match_id matchId,m.played_at playedAt,m.patch,s.side,s.won,s.kills,s.deaths,s.assists,
+        s.gold_diff_15 goldDiff15,s.xp_diff_15 xpDiff15,s.cs_diff_15 csDiff15,s.first_blood firstBlood,
+        s.first_tower firstTower,s.dragons,s.barons,s.vision_score_per_minute vision
+       FROM team_game_stats s JOIN matches m ON m.id=s.match_id WHERE s.team_id=? ORDER BY m.played_at DESC`,
+    )
+    .bind(id)
+    .all<TeamGameDbRow>();
+  if (!gameRows.length) return null;
+  const playerStatement = roster.length
+    ? db.prepare(
+        `SELECT p.match_id matchId,p.player_name playerName,m.played_at playedAt,m.patch,s.won,p.kills,p.deaths,p.assists,p.champion
+         FROM player_game_stats p JOIN matches m ON m.id=p.match_id JOIN team_game_stats s ON s.match_id=p.match_id AND s.team_id=p.team_id
+         WHERE p.team_id=? AND p.player_name IN (${roster.map(() => "?").join(",")})`,
+      ).bind(id, ...roster.map((player) => player.name))
+    : db.prepare("SELECT NULL matchId,NULL playerName,NULL playedAt,NULL patch,NULL won,NULL kills,NULL deaths,NULL assists,NULL champion WHERE 0");
+  const { results: playerRows = [] } = await playerStatement.all<PlayerGameDbRow>();
+  const rosterByMatch = new Map<number, Set<string>>();
+  for (const row of playerRows) {
+    const players = rosterByMatch.get(row.matchId) ?? new Set<string>();
+    players.add(row.playerName);
+    rosterByMatch.set(row.matchId, players);
+  }
+  const games: TeamGame[] = gameRows.map((row) => ({ ...row, rosterOverlap: rosterByMatch.get(row.matchId)?.size ?? 0 }));
+  const playerGames: PlayerGame[] = playerRows.map(({ matchId: _matchId, playerName: _playerName, ...row }) => row);
+  return profileTeam(team.id, team.name, games, roster, playerGames, patch, referenceDate);
 }
 
 async function startImport(db: D1Database, body: Required<StartImportBody>) {
@@ -187,9 +178,22 @@ export default {
       const leftId = Number(url.searchParams.get("teamA"));
       const rightId = Number(url.searchParams.get("teamB"));
       if (!Number.isInteger(leftId) || !Number.isInteger(rightId) || leftId === rightId) return json({ error: "Select two distinct teams." }, 400);
-      const [left, right] = await Promise.all([stats(env.DB, leftId), stats(env.DB, rightId)]);
+      const latest = await currentPatch(env.DB);
+      const patch = latest?.patch ?? null;
+      const referenceDate = latest?.playedAt ? new Date(`${latest.playedAt.replace(" ", "T")}Z`) : new Date();
+      const [left, right] = await Promise.all([teamProfile(env.DB, leftId, patch, referenceDate), teamProfile(env.DB, rightId, patch, referenceDate)]);
       if (!left || !right) return json({ error: "Both teams need imported Oracle's Elixir statistics." }, 404);
-      return json(predict(left, right));
+      const prediction = predictTimeAware(left, right);
+      return json({
+        teamA: left.name,
+        teamB: right.name,
+        ...prediction,
+        model: "Time-aware roster and patch model",
+        currentPatch: patch,
+        asOf: latest?.playedAt ?? [left.lastGameAt, right.lastGameAt].filter((date): date is string => !!date).sort().at(-1) ?? null,
+        teamAContext: { games: left.games, effectiveGames: left.effectiveGames, recentGames: left.recentGames, roster: left.roster, patchPlayerGames: left.patchPlayerGames },
+        teamBContext: { games: right.games, effectiveGames: right.effectiveGames, recentGames: right.recentGames, roster: right.roster, patchPlayerGames: right.patchPlayerGames },
+      });
     }
     return env.ASSETS.fetch(request);
   },
