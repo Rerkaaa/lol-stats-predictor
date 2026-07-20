@@ -12,6 +12,11 @@ type TeamRow = { id: number; name: string };
 type RosterDbRow = { name: string; role: string | null; games: number };
 type TeamGameDbRow = Omit<TeamGame, "rosterOverlap">;
 type PlayerGameDbRow = PlayerGame & { matchId: number; playerName: string };
+type RecentMapRow = {
+  matchId: number; playedAt: string | null; stage: string | null; patch: string | null; durationSeconds: number | null;
+  blueTeamId: number; blueTeam: string; redTeamId: number; redTeam: string; winnerTeamId: number | null;
+  blueKills: number | null; redKills: number | null;
+};
 
 type StartImportBody = { year?: number; sourceUrl?: string; sourceHash?: string };
 type ChangedGamesBody = StartImportBody & { games?: Array<{ gameId?: string; sourceHash?: string }> };
@@ -70,6 +75,40 @@ async function teamProfile(db: D1Database, id: number, patch: string | null, ref
   const games: TeamGame[] = gameRows.map((row) => ({ ...row, rosterOverlap: rosterByMatch.get(row.matchId)?.size ?? 0 }));
   const playerGames: PlayerGame[] = playerRows.map(({ matchId: _matchId, playerName: _playerName, ...row }) => row);
   return profileTeam(team.id, team.name, games, roster, playerGames, patch, referenceDate);
+}
+
+async function latestSeries(db: D1Database) {
+  const { results = [] } = await db.prepare(
+    `SELECT m.id matchId,m.played_at playedAt,m.stage,m.patch,m.duration_seconds durationSeconds,
+      m.blue_team_id blueTeamId,blue.name blueTeam,m.red_team_id redTeamId,red.name redTeam,m.winner_team_id winnerTeamId,
+      blue_stats.kills blueKills,red_stats.kills redKills
+     FROM matches m JOIN teams blue ON blue.id=m.blue_team_id JOIN teams red ON red.id=m.red_team_id
+     LEFT JOIN team_game_stats blue_stats ON blue_stats.match_id=m.id AND blue_stats.team_id=m.blue_team_id
+     LEFT JOIN team_game_stats red_stats ON red_stats.match_id=m.id AND red_stats.team_id=m.red_team_id
+     WHERE m.source_game_id LIKE 'oracle:%' AND m.played_at>='2022-01-01'
+     ORDER BY m.played_at DESC,m.id DESC LIMIT 120`,
+  ).all<RecentMapRow>();
+  const groups = new Map<string, RecentMapRow[]>();
+  for (const map of results) {
+    const date = map.playedAt?.slice(0, 10) ?? "unknown-date";
+    const teams = [map.blueTeamId, map.redTeamId].sort((left, right) => left - right).join(":");
+    const key = `${date}|${map.stage ?? "Unknown competition"}|${teams}`;
+    const series = groups.get(key) ?? [];
+    series.push(map);
+    groups.set(key, series);
+  }
+  return [...groups.values()].map((maps) => {
+    const chronological = [...maps].sort((left, right) => String(left.playedAt).localeCompare(String(right.playedAt)) || left.matchId - right.matchId);
+    const first = chronological[0];
+    const scores = new Map<number, number>([[first.blueTeamId, 0], [first.redTeamId, 0]]);
+    for (const map of chronological) if (map.winnerTeamId !== null) scores.set(map.winnerTeamId, (scores.get(map.winnerTeamId) ?? 0) + 1);
+    return {
+      playedAt: chronological.at(-1)?.playedAt ?? null, competition: first.stage ?? "Unknown competition",
+      teamA: { name: first.blueTeam, score: scores.get(first.blueTeamId) ?? 0 },
+      teamB: { name: first.redTeam, score: scores.get(first.redTeamId) ?? 0 },
+      maps: chronological.map((map, index) => ({ number: index + 1, patch: map.patch, durationSeconds: map.durationSeconds, blueTeam: map.blueTeam, redTeam: map.redTeam, blueKills: map.blueKills, redKills: map.redKills, winner: map.winnerTeamId === map.blueTeamId ? map.blueTeam : map.winnerTeamId === map.redTeamId ? map.redTeam : null })),
+    };
+  }).sort((left, right) => String(right.playedAt).localeCompare(String(left.playedAt))).slice(0, 12);
 }
 
 async function startImport(db: D1Database, body: Required<StartImportBody>) {
@@ -174,6 +213,7 @@ export default {
         .all();
       return json(results);
     }
+    if (url.pathname === "/api/latest-series") return json(await latestSeries(env.DB));
     if (url.pathname === "/api/matchup") {
       const leftId = Number(url.searchParams.get("teamA"));
       const rightId = Number(url.searchParams.get("teamB"));
