@@ -1,6 +1,6 @@
 # LoL Stats Predictor
 
-Hosted League of Legends matchup dashboard using Cloudflare Workers, D1, and static assets. GitHub stores code only; historical data lives in D1.
+Hosted League of Legends matchup dashboard using Cloudflare Workers, D1, and static assets. GitHub stores code only; Oracle’s Elixir 2020+ historical data lives in D1.
 
 ## Before first deployment
 
@@ -17,9 +17,9 @@ The deployed Worker serves the static dashboard and the `/api/teams` and `/api/m
 
 The migration stores tournaments, teams, individual matches, team game stats, player game stats, and picks/bans. This avoids Excel row limits and supports rebuilding team aggregates from the raw match-level facts.
 
-## Historical import: Oracle’s Elixir
+## Historical import: Oracle’s Elixir (2020+)
 
-Historical match data comes from Oracle’s Elixir bulk CSV files, processed remotely by a GitHub Actions workflow and written in batches to D1. Your laptop is not used for the download or import.
+Historical match data comes exclusively from Oracle’s Elixir 2020+ bulk CSV files, processed remotely by a GitHub Actions workflow and written in batches to D1. Your laptop is not used for the download or import. Gol.gg is not part of the production pipeline.
 
 1. Apply migrations and deploy the Worker.
 2. Create a strong random `IMPORT_TOKEN` secret in Cloudflare with `npx.cmd wrangler secret put IMPORT_TOKEN`.
@@ -28,4 +28,4 @@ Historical match data comes from Oracle’s Elixir bulk CSV files, processed rem
    - `ORACLE_IMPORT_TOKEN`: the same token.
 4. In GitHub, open **Actions → Import Oracle's Elixir season → Run workflow**. Enter a year and the direct Oracle’s Elixir CSV URL.
 
-The workflow supports batches of 250 source rows and records progress at `/api/import/status`. It imports available fields only; blank source fields remain blank and are excluded from the prediction weighting.
+The workflow supports batches of 250 source rows and records progress at `/api/import/status`. It imports available Oracle fields—results, sides, team and player KDA, champions, CS, gold, damage, vision, 15-minute gold/XP/CS differences, and objectives. Blank source fields remain blank and are excluded from prediction weighting.

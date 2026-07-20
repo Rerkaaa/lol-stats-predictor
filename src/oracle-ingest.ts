@@ -20,9 +20,9 @@ export async function ingestOracleRows(db: D1Database, rawRows: OracleRow[]) {
     if (!match) { rejected++; continue; }
     await db.prepare(row.side === "blue" ? "UPDATE matches SET blue_team_id=? WHERE id=?" : "UPDATE matches SET red_team_id=? WHERE id=?").bind(team, match.id).run();
     if (row.isTeamRow) {
-      await db.prepare("INSERT OR REPLACE INTO team_game_stats(match_id,team_id,side,won,kills,deaths,assists,gold_diff_15,xp_diff_15,cs_diff_15,first_blood,first_tower,dragons,barons,heralds,towers) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(match.id,team,row.side,row.result,row.kills,row.deaths,row.assists,row.goldDiff15,row.xpDiff15,row.csDiff15,row.firstBlood,row.firstTower,row.dragons,row.barons,row.heralds,row.towers).run();
+      await db.prepare("INSERT OR REPLACE INTO team_game_stats(match_id,team_id,side,won,kills,deaths,assists,gold,gold_per_minute,gold_diff_15,xp_diff_15,cs_diff_15,first_blood,first_tower,dragons,barons,heralds,towers) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(match.id,team,row.side,row.result,row.kills,row.deaths,row.assists,row.gold,row.goldPerMinute,row.goldDiff15,row.xpDiff15,row.csDiff15,row.firstBlood,row.firstTower,row.dragons,row.barons,row.heralds,row.towers).run();
     } else if (row.player) {
-      await db.prepare("INSERT OR REPLACE INTO player_game_stats(match_id,team_id,player_name,role,champion,kills,deaths,assists,cs) VALUES(?,?,?,?,?,?,?,?,?)").bind(match.id,team,row.player,row.role,row.champion,row.kills,row.deaths,row.assists,row.cs).run();
+      await db.prepare("INSERT OR REPLACE INTO player_game_stats(match_id,team_id,player_name,role,champion,kills,deaths,assists,cs,gold,damage,vision_score) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)").bind(match.id,team,row.player,row.role,row.champion,row.kills,row.deaths,row.assists,row.cs,row.gold,row.damage,row.visionScore).run();
       if (row.champion) await db.prepare("INSERT OR IGNORE INTO drafts(match_id,team_id,phase,sequence_no,champion) VALUES(?,?,?,?,?)").bind(match.id,team,"pick",["TOP","JUNGLE","MID","BOT","SUPPORT"].indexOf((row.role ?? "").toUpperCase()) + 1,row.champion).run();
     }
     accepted++;
