@@ -124,7 +124,7 @@ async function handleOracleAdmin(request: Request, env: Env, pathname: string) {
 
     if (pathname === "/api/admin/oracle/changed-games") {
       const supplied = body.games;
-      if (!Array.isArray(supplied) || supplied.length < 1 || supplied.length > 200) return json({ error: "Expected 1-200 game hashes." }, 400);
+      if (!Array.isArray(supplied) || supplied.length < 1 || supplied.length > 80) return json({ error: "Expected 1-80 game hashes." }, 400);
       const games = supplied.filter((game): game is { gameId: string; sourceHash: string } => typeof game?.gameId === "string" && game.gameId.length > 0 && validHash(game.sourceHash));
       if (games.length !== supplied.length) return json({ error: "Every game needs an ID and SHA-256 hash." }, 400);
       const sourceIds = games.map((game) => `oracle:${game.gameId}`);

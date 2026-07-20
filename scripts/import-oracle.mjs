@@ -62,8 +62,8 @@ for (const row of rows) {
 
 const games = [...byGame.entries()].map(([gameId, gameRows]) => ({ gameId, sourceHash: sha256(JSON.stringify(gameRows)), rows: gameRows }));
 const changedIds = new Set();
-for (let index = 0; index < games.length; index += 200) {
-  const hashBatch = games.slice(index, index + 200).map(({ gameId, sourceHash: gameHash }) => ({ gameId, sourceHash: gameHash }));
+for (let index = 0; index < games.length; index += 80) {
+  const hashBatch = games.slice(index, index + 80).map(({ gameId, sourceHash: gameHash }) => ({ gameId, sourceHash: gameHash }));
   const response = await post("/api/admin/oracle/changed-games", { year, sourceUrl, sourceHash, games: hashBatch });
   for (const gameId of response.changedGameIds ?? []) changedIds.add(gameId);
 }
