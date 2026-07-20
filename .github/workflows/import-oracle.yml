@@ -1,32 +1,68 @@
-name: Import Oracle's Elixir season
+name: Sync Oracle's Elixir data
 
 on:
   workflow_dispatch:
     inputs:
       year:
-        description: "CSV season year, for example 2025"
-        required: true
+        description: "Season year. Leave blank to use the current Europe/Tirane year."
+        required: false
         type: string
       source_url:
-        description: "Direct Oracle's Elixir CSV download URL"
-        required: true
+        description: "Optional direct CSV URL. Leave blank to resolve the public Oracle Drive folder."
+        required: false
         type: string
+      max_games:
+        description: "Optional safety limit for a test or phased historical import. Leave blank for all changed games."
+        required: false
+        type: string
+  schedule:
+    # GitHub Actions uses UTC. One of these is 00:01 in Europe/Tirane across DST changes.
+    - cron: "1 22 * * *"
+    - cron: "1 23 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-import
+  cancel-in-progress: false
 
 jobs:
   import:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 360
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
         with:
           version: 11
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: node scripts/import-oracle.mjs "${{ inputs.year }}" "${{ inputs.source_url }}"
+      - name: Import from Oracle's public Drive folder
+        shell: bash
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_YEAR: ${{ inputs.year }}
+          INPUT_SOURCE_URL: ${{ inputs.source_url }}
+          ORACLE_MAX_GAMES: ${{ inputs.max_games }}
           ORACLE_IMPORT_URL: ${{ secrets.ORACLE_IMPORT_URL }}
           ORACLE_IMPORT_TOKEN: ${{ secrets.ORACLE_IMPORT_TOKEN }}
+        run: |
+          if [[ "$EVENT_NAME" == "schedule" ]]; then
+            if ! node scripts/is-tirane-midnight.mjs; then
+              echo "Not the Europe/Tirane midnight run; nothing to do."
+              exit 0
+            fi
+            YEAR="$(node scripts/current-oracle-year.mjs)"
+            SOURCE_URL="$(node scripts/resolve-oracle-drive-file.mjs "$YEAR")"
+          else
+            YEAR="$INPUT_YEAR"
+            if [[ -z "$YEAR" ]]; then YEAR="$(node scripts/current-oracle-year.mjs)"; fi
+            SOURCE_URL="$INPUT_SOURCE_URL"
+            if [[ -z "$SOURCE_URL" ]]; then SOURCE_URL="$(node scripts/resolve-oracle-drive-file.mjs "$YEAR")"; fi
+          fi
+          echo "Importing Oracle's Elixir season $YEAR"
+          node scripts/import-oracle.mjs "$YEAR" "$SOURCE_URL"

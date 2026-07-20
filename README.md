@@ -1,31 +1,36 @@
 # LoL Stats Predictor
 
-Hosted League of Legends matchup dashboard using Cloudflare Workers, D1, and static assets. GitHub stores code only; Oracle’s Elixir 2020+ historical data lives in D1.
+Hosted League of Legends matchup dashboard using Cloudflare Workers, D1, and static assets. GitHub stores code only; Oracle's Elixir 2020+ historical data is imported remotely into D1.
 
-## Before first deployment
+## Setup
 
-1. In the Cloudflare dashboard, open **Workers & Pages → D1 → lol-stats-db** and copy its database ID.
-2. Replace `REPLACE_WITH_YOUR_D1_DATABASE_ID` in `wrangler.jsonc` with that ID. Do not commit API tokens or secrets.
-3. Install Node.js 20 or newer, then run `npm install`.
-4. Run `npx wrangler login`, which opens Cloudflare's secure sign-in flow.
-5. Create the database tables with `npm run db:migrate`.
-6. Deploy with `npm run deploy`.
+1. Apply D1 migrations and deploy the Worker.
+2. Set a strong Cloudflare Worker secret named `IMPORT_TOKEN`.
+3. Add these GitHub Actions secrets:
+   - `ORACLE_IMPORT_URL`: the deployed Worker URL, for example `https://lol-stats-predictor.example.workers.dev`
+   - `ORACLE_IMPORT_TOKEN`: the exact same secret value.
 
-The deployed Worker serves the static dashboard and the `/api/teams` and `/api/matchup` endpoints. Until historical data is imported, the interface will correctly show no teams.
+No CSV is downloaded to the laptop. GitHub Actions downloads public Oracle's Elixir CSV files and sends bounded, complete-game batches to the Worker.
 
-## Data model
+## Automated data refresh
 
-The migration stores tournaments, teams, individual matches, team game stats, player game stats, and picks/bans. This avoids Excel row limits and supports rebuilding team aggregates from the raw match-level facts.
+The workflow resolves files from the public Oracle Drive folder and refreshes the current Europe/Tirane year every day at approximately 00:01 local time. Two UTC schedules handle daylight-saving changes; the run outside the local midnight hour exits without importing.
 
-## Historical import: Oracle’s Elixir (2020+)
+The daily run hashes the CSV first. If the source file is unchanged, it exits without parsing or writing data. If the file changed, it compares per-game hashes and writes only new or updated games.
 
-Historical match data comes exclusively from Oracle’s Elixir 2020+ bulk CSV files, processed remotely by a GitHub Actions workflow and written in batches to D1. Your laptop is not used for the download or import. Gol.gg is not part of the production pipeline.
+## Manual historical import
 
-1. Apply migrations and deploy the Worker.
-2. Create a strong random `IMPORT_TOKEN` secret in Cloudflare with `npx.cmd wrangler secret put IMPORT_TOKEN`.
-3. Add GitHub repository secrets:
-   - `ORACLE_IMPORT_URL`: your Worker URL, for example `https://lol-stats-predictor.example.workers.dev`
-   - `ORACLE_IMPORT_TOKEN`: the same token.
-4. In GitHub, open **Actions → Import Oracle's Elixir season → Run workflow**. Enter a year and the direct Oracle’s Elixir CSV URL.
+In GitHub, open **Actions -> Sync Oracle's Elixir data -> Run workflow**.
 
-The workflow supports batches of 250 source rows and records progress at `/api/import/status`. It imports available Oracle fields—results, sides, team and player KDA, champions, CS, gold, damage, vision, 15-minute gold/XP/CS differences, and objectives. Blank source fields remain blank and are excluded from prediction weighting.
+- Leave both inputs blank to import the current year from the public Drive folder.
+- Enter a year (for example `2020`) and leave the URL blank to resolve that year's file from the folder.
+- Supply a direct CSV URL only when intentionally using a different public source.
+- Set **max_games** only for a small test or deliberately phased backfill; leave it blank for the complete changed-game set.
+
+Run historical years one at a time. The import is idempotent: restarting a failed year safely skips already-versioned games and updates only missing or changed ones.
+
+## Stored data and prediction safety
+
+The normalized schema stores matches, teams, team results, player KDA, champions, CS, gold, damage, vision, objective control, 15-minute gold/XP/CS differences, and picks/bans. Missing source values stay null rather than being invented.
+
+Predictions use only historical team aggregates. Outcome fields from the match being predicted are never used as input, preventing result leakage.

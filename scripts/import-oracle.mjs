@@ -1,19 +1,93 @@
+import { createHash } from "node:crypto";
 import { parse } from "csv-parse/sync";
 
-const [year, sourceUrl] = process.argv.slice(2);
-const workerUrl = process.env.ORACLE_IMPORT_URL;
+const [yearText, sourceUrl] = process.argv.slice(2);
+const year = Number(yearText);
+const workerUrl = process.env.ORACLE_IMPORT_URL?.replace(/\/$/, "");
 const token = process.env.ORACLE_IMPORT_TOKEN;
-if (!/^\d{4}$/.test(year ?? "") || !sourceUrl || !workerUrl || !token) throw new Error("Usage: node scripts/import-oracle.mjs YEAR CSV_URL with ORACLE_IMPORT_URL and ORACLE_IMPORT_TOKEN set.");
-const response = await fetch(sourceUrl);
-if (!response.ok) throw new Error(`Oracle CSV download failed: ${response.status}`);
-const csv = await response.text();
-const rows = parse(csv, { columns: true, skip_empty_lines: true, relax_column_count: true, bom: true });
-let accepted = 0, rejected = 0;
-for (let start = 0; start < rows.length; start += 250) {
-  const batch = rows.slice(start, start + 250);
-  const result = await fetch(`${workerUrl.replace(/\/$/, "")}/api/admin/oracle/rows`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ year: Number(year), sourceUrl, rows: batch }) });
-  if (!result.ok) throw new Error(`Worker rejected batch ${start}: ${result.status} ${await result.text()}`);
-  const payload = await result.json(); accepted += payload.accepted ?? 0; rejected += payload.rejected ?? 0;
-  console.log(`${Math.min(start + batch.length, rows.length)}/${rows.length} rows sent`);
+const maxGames = Number(process.env.ORACLE_MAX_GAMES ?? 0);
+
+if (!Number.isInteger(year) || year < 2020 || !sourceUrl || !workerUrl || !token || !Number.isInteger(maxGames) || maxGames < 0) {
+  throw new Error("Usage: node scripts/import-oracle.mjs YEAR CSV_URL with ORACLE_IMPORT_URL and ORACLE_IMPORT_TOKEN set.");
 }
-console.log(JSON.stringify({ year, rows: rows.length, accepted, rejected }));
+
+const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+
+async function post(path, body) {
+  let lastError = "Unknown import error";
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      const response = await fetch(`${workerUrl}${path}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const text = await response.text();
+      if (response.ok) return text ? JSON.parse(text) : {};
+      lastError = `${response.status} ${text}`;
+      if (response.status !== 429 && response.status < 500) break;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+    await delay(500 * 2 ** attempt);
+  }
+  throw new Error(`Worker request ${path} failed: ${lastError}`);
+}
+
+const sourceResponse = await fetch(sourceUrl);
+if (!sourceResponse.ok) throw new Error(`Oracle CSV download failed: ${sourceResponse.status}`);
+const sourceBytes = Buffer.from(await sourceResponse.arrayBuffer());
+const sourceHash = sha256(sourceBytes);
+const start = await post("/api/admin/oracle/start", { year, sourceUrl, sourceHash });
+if (start.unchanged) {
+  console.log(JSON.stringify({ year, skipped: true, reason: "The source file is unchanged." }));
+  process.exit(0);
+}
+
+const rows = parse(sourceBytes.toString("utf8"), {
+  columns: true,
+  skip_empty_lines: true,
+  relax_column_count: true,
+  bom: true,
+});
+const byGame = new Map();
+for (const row of rows) {
+  const gameId = String(row.gameid ?? "").trim();
+  if (!gameId) continue;
+  const gameRows = byGame.get(gameId) ?? [];
+  gameRows.push(row);
+  byGame.set(gameId, gameRows);
+}
+
+const games = [...byGame.entries()].map(([gameId, gameRows]) => ({ gameId, sourceHash: sha256(JSON.stringify(gameRows)), rows: gameRows }));
+const changedIds = new Set();
+for (let index = 0; index < games.length; index += 200) {
+  const hashBatch = games.slice(index, index + 200).map(({ gameId, sourceHash: gameHash }) => ({ gameId, sourceHash: gameHash }));
+  const response = await post("/api/admin/oracle/changed-games", { year, sourceUrl, sourceHash, games: hashBatch });
+  for (const gameId of response.changedGameIds ?? []) changedIds.add(gameId);
+}
+
+const changedGames = games.filter((game) => changedIds.has(game.gameId));
+const gamesToImport = maxGames > 0 ? changedGames.slice(0, maxGames) : changedGames;
+let accepted = 0;
+let skipped = games.length - changedGames.length;
+let rejected = 0;
+for (let index = 0; index < gamesToImport.length; index += 2) {
+  const batch = gamesToImport.slice(index, index + 2);
+  const response = await post("/api/admin/oracle/games", { year, sourceUrl, sourceHash, games: batch });
+  accepted += response.accepted ?? 0;
+  skipped += response.skipped ?? 0;
+  rejected += response.rejected ?? 0;
+  const completed = Math.min(index + batch.length, gamesToImport.length);
+  if (completed === gamesToImport.length || completed % 25 === 0) console.log(`${completed}/${gamesToImport.length} changed games processed`);
+  await delay(40);
+}
+
+if (gamesToImport.length !== changedGames.length) {
+  console.log(JSON.stringify({ year, sourceRows: rows.length, games: games.length, changedGames: changedGames.length, processedGames: gamesToImport.length, accepted, skipped, rejected, complete: false }));
+  process.exit(0);
+}
+
+await post("/api/admin/oracle/complete", { year, sourceUrl, sourceHash });
+console.log(JSON.stringify({ year, sourceRows: rows.length, games: games.length, changedGames: changedGames.length, accepted, skipped, rejected }));
