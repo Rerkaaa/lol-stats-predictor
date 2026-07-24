@@ -193,7 +193,10 @@ async function fullMatchDetails(env: Env, url: URL) {
   const matchId = url.searchParams.get("matchId") ?? "";
   if (!(region in riotRouting) || !/^[A-Za-z0-9_:-]+$/.test(matchId)) return json({ error: "Invalid match request." }, 400);
   const cached = await env.DB.prepare("SELECT payload_json FROM riot_match_detail_cache WHERE match_id=?").bind(matchId).first<{ payload_json: string }>();
-  if (cached) return json(JSON.parse(cached.payload_json));
+  if (cached) {
+    const payload = JSON.parse(cached.payload_json);
+    if (payload.timelinePlayers) return json(payload);
+  }
   const [platform, routing] = riotRouting[region];
   try {
     const [match, timeline, version] = await Promise.all([
@@ -212,7 +215,8 @@ async function fullMatchDetails(env: Env, url: URL) {
       const sum = (rows: any[], field: string) => rows.reduce((total, row) => total + (Number(row[field]) || 0), 0);
       return { minute: Math.round((frame.timestamp || 0) / 60000), blue: { gold: sum(blue, "totalGold"), xp: sum(blue, "xp"), cs: sum(blue, "minionsKilled") + sum(blue, "jungleMinionsKilled") }, red: { gold: sum(red, "totalGold"), xp: sum(red, "xp"), cs: sum(red, "minionsKilled") + sum(red, "jungleMinionsKilled") } };
     });
-    const payload = { matchId, version, duration: match.info.gameDuration, queueId: match.info.queueId, gameMode: match.info.gameMode, playedAt: new Date(match.info.gameCreation).toISOString(), players, timeline: timelineFrames };
+    const timelinePlayers = (timeline.info.frames ?? []).map((frame: any) => ({ minute: Math.round((frame.timestamp || 0) / 60000), players: Object.values(frame.participantFrames ?? {}).map((value: any) => ({ participantId: Number(value.participantId), gold: Number(value.totalGold) || 0, xp: Number(value.xp) || 0, cs: (Number(value.minionsKilled) || 0) + (Number(value.jungleMinionsKilled) || 0) })) }));
+    const payload = { matchId, version, duration: match.info.gameDuration, queueId: match.info.queueId, gameMode: match.info.gameMode, playedAt: new Date(match.info.gameCreation).toISOString(), players, timeline: timelineFrames, timelinePlayers };
     await env.DB.prepare("INSERT INTO riot_match_detail_cache(match_id,region,payload_json,updated_at) VALUES(?,?,?,?)").bind(matchId, region, JSON.stringify(payload), new Date().toISOString()).run();
     return json(payload);
   } catch (error) {
