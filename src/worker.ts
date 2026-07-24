@@ -21,8 +21,9 @@ type RecentMapRow = {
 };
 type RecentPlayerRow = { matchId: number; teamId: number; playerName: string; role: string | null; champion: string | null; kills: number | null; deaths: number | null; assists: number | null; cs: number | null; gold: number | null; damage: number | null; visionScore: number | null };
 type RiotAccount = { puuid: string; gameName: string; tagLine: string };
-type RiotSummoner = { profileIconId: number; summonerLevel: number };
+type RiotSummoner = { id: string; profileIconId: number; summonerLevel: number };
 type RiotLeagueEntry = { queueType: string; tier: string; rank: string; leaguePoints: number; wins: number; losses: number };
+type RiotLeagueList = { entries: Array<{ summonerId: string; leaguePoints: number; wins: number; losses: number }> };
 type RiotMatch = { metadata: { matchId: string }; info: { gameCreation: number; gameDuration: number; gameMode: string; queueId: number; participants: Array<{ puuid: string; teamId: number; championName: string; championId: number; kills: number; deaths: number; assists: number; win: boolean; totalMinionsKilled: number; neutralMinionsKilled: number; teamPosition: string }> } };
 type RiotMastery = { championId: number; championPoints: number; lastPlayTime: number };
 type DataDragonChampion = { key: string; name: string; id: string };
@@ -64,6 +65,15 @@ async function dataDragonVersion() {
   if (!response.ok) return null;
   const versions = await response.json<string[]>();
   return versions[0] ?? null;
+}
+
+async function apexLadderPosition(platform: string, summonerId: string, tier: string, apiKey: string) {
+  const endpoint = tier === "CHALLENGER" ? "challengerleagues" : tier === "GRANDMASTER" ? "grandmasterleagues" : "masterleagues";
+  const ladder = await riotFetch<RiotLeagueList>(`https://${platform}.api.riotgames.com/lol/league/v4/${endpoint}/by-queue/RANKED_SOLO_5x5`, apiKey);
+  const entries = [...ladder.entries].sort((left, right) => right.leaguePoints - left.leaguePoints || right.wins - left.wins || left.losses - right.losses);
+  const position = entries.findIndex((entry) => entry.summonerId === summonerId);
+  if (position < 0) return null;
+  return { position: position + 1, total: entries.length, topPercent: ((position + 1) / Math.max(1, entries.length)) * 100 };
 }
 
 const pause = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
@@ -119,11 +129,15 @@ async function summonerLookup(request: Request, env: Env, url: URL) {
     const championData = version ? await fetch(`https://ddragon.leagueoflegends.com/cdn/${version}/data/en_US/champion.json`).then((response) => response.ok ? response.json<{ data: Record<string, DataDragonChampion> }>() : null).catch(() => null) : null;
     const championsById = new Map(Object.values(championData?.data ?? {}).map((champion) => [Number(champion.key), champion]));
     const solo = leagues.find((entry) => entry.queueType === "RANKED_SOLO_5x5");
+    const ladder = solo && ["MASTER", "GRANDMASTER", "CHALLENGER"].includes(solo.tier)
+      ? await apexLadderPosition(platform, summoner.id, solo.tier, env.RIOT_API_KEY).catch(() => null)
+      : null;
     const updatedAt = new Date().toISOString();
     const data = {
       profile: { gameName: account.gameName, tagLine: account.tagLine, summonerLevel: summoner.summonerLevel, profileIconId: summoner.profileIconId, region },
       updatedAt,
       rank: solo ? { tier: solo.tier, rank: solo.rank, leaguePoints: solo.leaguePoints, wins: solo.wins, losses: solo.losses } : null,
+      ladder,
       dataDragonVersion: version,
       masteryAvailable: mastery !== null,
       mastery: (mastery ?? []).map((entry) => {
