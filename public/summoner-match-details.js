@@ -26,7 +26,7 @@
     });
     output.querySelectorAll('.recent-game:not([data-match-details])').forEach((row) => {
       const champion = row.querySelector('.champion-cell strong')?.textContent?.trim() || '';
-      const date = row.querySelector('div:last-child span')?.textContent?.trim() || '';
+      const date = row.querySelector(':scope > div:nth-of-type(3) span')?.textContent?.trim() || '';
       const kda = row.querySelector('.match-kda b')?.textContent?.trim() || '';
       const match = candidates.get(matchKey(champion, date, kda))?.shift();
       row.dataset.matchDetails = 'true';
