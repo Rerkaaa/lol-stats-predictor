@@ -217,7 +217,7 @@ async function fullMatchDetails(env: Env, url: URL) {
     });
     const timelinePlayers = (timeline.info.frames ?? []).map((frame: any) => ({ minute: Math.round((frame.timestamp || 0) / 60000), players: Object.values(frame.participantFrames ?? {}).map((value: any) => ({ participantId: Number(value.participantId), gold: Number(value.totalGold) || 0, xp: Number(value.xp) || 0, cs: (Number(value.minionsKilled) || 0) + (Number(value.jungleMinionsKilled) || 0) })) }));
     const payload = { matchId, version, duration: match.info.gameDuration, queueId: match.info.queueId, gameMode: match.info.gameMode, playedAt: new Date(match.info.gameCreation).toISOString(), players, timeline: timelineFrames, timelinePlayers };
-    await env.DB.prepare("INSERT INTO riot_match_detail_cache(match_id,region,payload_json,updated_at) VALUES(?,?,?,?)").bind(matchId, region, JSON.stringify(payload), new Date().toISOString()).run();
+    await env.DB.prepare("INSERT INTO riot_match_detail_cache(match_id,region,payload_json,updated_at) VALUES(?,?,?,?) ON CONFLICT(match_id) DO UPDATE SET region=excluded.region,payload_json=excluded.payload_json,updated_at=excluded.updated_at").bind(matchId, region, JSON.stringify(payload), new Date().toISOString()).run();
     return json(payload);
   } catch (error) {
     const [message, status] = riotError(error);
