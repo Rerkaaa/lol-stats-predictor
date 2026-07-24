@@ -1,6 +1,6 @@
 const a=document.querySelector('#teamA'),b=document.querySelector('#teamB'),predictButton=document.querySelector('#predict'),killsLine=document.querySelector('#killsLine'),durationLine=document.querySelector('#durationLine'),historyTeam=document.querySelector('#historyTeam'),historyOpponent=document.querySelector('#historyOpponent'),historyTeams=document.querySelector('#historyTeams'),historySummary=document.querySelector('#historySummary'),latestUpdated=document.querySelector('#latestUpdated'),latestSeries=document.querySelector('#latestSeries'),lookupForm=document.querySelector('#lookupForm'),lookupStatus=document.querySelector('#lookupStatus'),lookupResult=document.querySelector('#lookupResult');
 let teams=[];
-const labelWinRatePies=()=>lookupResult.querySelectorAll('.pie:not([data-labeled])').forEach(pie=>{pie.dataset.labeled='true';pie.innerHTML=`<span>${pie.style.getPropertyValue('--win')}</span>`});
+const labelWinRatePies=()=>lookupResult.querySelectorAll('.pie:not([data-labeled])').forEach(pie=>{pie.dataset.labeled='true';pie.insertAdjacentHTML('afterend',`<b class="pie-percent">${pie.style.getPropertyValue('--win')}</b>`)});
 new MutationObserver(labelWinRatePies).observe(lookupResult,{childList:true,subtree:true});
 const esc=value=>String(value??'').replace(/[&<>'"]/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
 const minutes=value=>`${Math.floor(value)}:${String(Math.round((value%1)*60)).padStart(2,'0')}`;
