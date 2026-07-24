@@ -98,7 +98,7 @@ async function summonerLookup(request: Request, env: Env, url: URL) {
       riotFetch<RiotSummoner>(`https://${platform}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/${account.puuid}`, env.RIOT_API_KEY),
       riotFetch<RiotLeagueEntry[]>(`https://${platform}.api.riotgames.com/lol/league/v4/entries/by-puuid/${account.puuid}`, env.RIOT_API_KEY),
       riotFetch<string[]>(`https://${routing}.api.riotgames.com/lol/match/v5/matches/by-puuid/${account.puuid}/ids?start=0&count=20`, env.RIOT_API_KEY),
-      riotFetch<RiotMastery[]>(`https://${platform}.api.riotgames.com/lol/champion-mastery/v4/player/${account.puuid}/top?count=5`, env.RIOT_API_KEY),
+      riotFetch<RiotMastery[]>(`https://${platform}.api.riotgames.com/lol/champion-mastery/v4/player/${account.puuid}/top?count=5`, env.RIOT_API_KEY).catch((error) => error instanceof RiotApiError && error.status === 403 ? null : Promise.reject(error)),
     ]);
     const [matches, version] = await Promise.all([
       detailsInBatches(matchIds, routing, env.RIOT_API_KEY),
@@ -111,7 +111,8 @@ async function summonerLookup(request: Request, env: Env, url: URL) {
       profile: { gameName: account.gameName, tagLine: account.tagLine, summonerLevel: summoner.summonerLevel, profileIconId: summoner.profileIconId, region },
       rank: solo ? { tier: solo.tier, rank: solo.rank, leaguePoints: solo.leaguePoints, wins: solo.wins, losses: solo.losses } : null,
       dataDragonVersion: version,
-      mastery: mastery.map((entry) => {
+      masteryAvailable: mastery !== null,
+      mastery: (mastery ?? []).map((entry) => {
         const champion = championsById.get(entry.championId);
         return { champion: champion?.name === "Wukong" ? "Wukong" : champion?.name ?? "Unknown champion", championAsset: champion?.id ?? "", points: entry.championPoints, lastPlayedAt: new Date(entry.lastPlayTime).toISOString() };
       }),
