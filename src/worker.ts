@@ -91,6 +91,12 @@ async function summonerLookup(request: Request, env: Env, url: URL) {
   const tagLine = url.searchParams.get("tagLine")?.trim() ?? "";
   const region = url.searchParams.get("region")?.toUpperCase() as RiotRegion;
   if (!gameName || !tagLine || gameName.length > 30 || tagLine.length > 10 || !(region in riotRouting)) return json({ error: "Enter a Riot ID, tag, and supported region." }, 400);
+  const lookupKey = `${region}:${gameName.toLocaleLowerCase()}:${tagLine.toLocaleLowerCase()}`;
+  const refresh = url.searchParams.get("refresh") === "1";
+  if (!refresh) {
+    const stored = await env.DB.prepare("SELECT payload_json FROM summoner_lookup_cache WHERE lookup_key=?").bind(lookupKey).first<{ payload_json: string }>();
+    if (stored) return json(JSON.parse(stored.payload_json));
+  }
   const [platform, routing] = riotRouting[region];
   const encodedName = encodeURIComponent(gameName), encodedTag = encodeURIComponent(tagLine);
   try {
@@ -108,8 +114,10 @@ async function summonerLookup(request: Request, env: Env, url: URL) {
     const championData = version ? await fetch(`https://ddragon.leagueoflegends.com/cdn/${version}/data/en_US/champion.json`).then((response) => response.ok ? response.json<{ data: Record<string, DataDragonChampion> }>() : null).catch(() => null) : null;
     const championsById = new Map(Object.values(championData?.data ?? {}).map((champion) => [Number(champion.key), champion]));
     const solo = leagues.find((entry) => entry.queueType === "RANKED_SOLO_5x5");
+    const updatedAt = new Date().toISOString();
     const data = {
       profile: { gameName: account.gameName, tagLine: account.tagLine, summonerLevel: summoner.summonerLevel, profileIconId: summoner.profileIconId, region },
+      updatedAt,
       rank: solo ? { tier: solo.tier, rank: solo.rank, leaguePoints: solo.leaguePoints, wins: solo.wins, losses: solo.losses } : null,
       dataDragonVersion: version,
       masteryAvailable: mastery !== null,
@@ -124,6 +132,10 @@ async function summonerLookup(request: Request, env: Env, url: URL) {
         return { id: match.metadata.matchId, champion: player.championName === "MonkeyKing" ? "Wukong" : player.championName, championAsset: player.championName, kills: player.kills, deaths: player.deaths, assists: player.assists, killParticipation: teamKills ? (player.kills + player.assists) / teamKills : null, win: player.win, cs: player.totalMinionsKilled + player.neutralMinionsKilled, role: player.teamPosition || "-", durationSeconds: match.info.gameDuration, queueId: match.info.queueId, playedAt: new Date(match.info.gameCreation).toISOString() };
       }).filter((match): match is NonNullable<typeof match> => match !== null),
     };
+    await env.DB.prepare(
+      `INSERT INTO summoner_lookup_cache(lookup_key,region,game_name,tag_line,payload_json,updated_at)
+       VALUES(?,?,?,?,?,?) ON CONFLICT(lookup_key) DO UPDATE SET payload_json=excluded.payload_json,updated_at=excluded.updated_at`,
+    ).bind(lookupKey, region, account.gameName, account.tagLine, JSON.stringify(data), updatedAt).run();
     const response = json(data);
     response.headers.set("cache-control", "no-store");
     return response;
