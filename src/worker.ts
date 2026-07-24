@@ -23,7 +23,9 @@ type RecentPlayerRow = { matchId: number; teamId: number; playerName: string; ro
 type RiotAccount = { puuid: string; gameName: string; tagLine: string };
 type RiotSummoner = { profileIconId: number; summonerLevel: number };
 type RiotLeagueEntry = { queueType: string; tier: string; rank: string; leaguePoints: number; wins: number; losses: number };
-type RiotMatch = { metadata: { matchId: string }; info: { gameCreation: number; gameDuration: number; queueId: number; participants: Array<{ puuid: string; championName: string; kills: number; deaths: number; assists: number; win: boolean; totalMinionsKilled: number; neutralMinionsKilled: number; teamPosition: string }> } };
+type RiotMatch = { metadata: { matchId: string }; info: { gameCreation: number; gameDuration: number; queueId: number; participants: Array<{ puuid: string; teamId: number; championName: string; championId: number; kills: number; deaths: number; assists: number; win: boolean; totalMinionsKilled: number; neutralMinionsKilled: number; teamPosition: string }> } };
+type RiotMastery = { championId: number; championPoints: number; lastPlayTime: number };
+type DataDragonChampion = { key: string; name: string; id: string };
 
 type StartImportBody = { year?: number; sourceUrl?: string; sourceHash?: string };
 type ChangedGamesBody = StartImportBody & { games?: Array<{ gameId?: string; sourceHash?: string }> };
@@ -63,6 +65,16 @@ async function dataDragonVersion() {
   return versions[0] ?? null;
 }
 
+const pause = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+
+async function detailsInBatches(ids: string[], routing: string, apiKey: string) {
+  const load = (batch: string[]) => Promise.all(batch.map((id) => riotFetch<RiotMatch>(`https://${routing}.api.riotgames.com/lol/match/v5/matches/${id}`, apiKey)));
+  const first = await load(ids.slice(0, 12));
+  if (ids.length <= 12) return first;
+  await pause(1100);
+  return [...first, ...await load(ids.slice(12))];
+}
+
 function riotError(error: unknown) {
   if (error instanceof RiotApiError) {
     if (error.status === 404) return ["That Riot ID was not found in the selected region.", 404] as const;
@@ -84,24 +96,32 @@ async function summonerLookup(request: Request, env: Env, url: URL) {
   const encodedName = encodeURIComponent(gameName), encodedTag = encodeURIComponent(tagLine);
   try {
     const account = await riotFetch<RiotAccount>(`https://${routing}.api.riotgames.com/riot/account/v1/accounts/by-riot-id/${encodedName}/${encodedTag}`, env.RIOT_API_KEY);
-    const [summoner, leagues, matchIds] = await Promise.all([
+    const [summoner, leagues, matchIds, mastery] = await Promise.all([
       riotFetch<RiotSummoner>(`https://${platform}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/${account.puuid}`, env.RIOT_API_KEY),
       riotFetch<RiotLeagueEntry[]>(`https://${platform}.api.riotgames.com/lol/league/v4/entries/by-puuid/${account.puuid}`, env.RIOT_API_KEY),
-      riotFetch<string[]>(`https://${routing}.api.riotgames.com/lol/match/v5/matches/by-puuid/${account.puuid}/ids?start=0&count=8`, env.RIOT_API_KEY),
+      riotFetch<string[]>(`https://${routing}.api.riotgames.com/lol/match/v5/matches/by-puuid/${account.puuid}/ids?start=0&count=20`, env.RIOT_API_KEY),
+      riotFetch<RiotMastery[]>(`https://${platform}.api.riotgames.com/lol/champion-mastery/v4/player/${account.puuid}/top?count=5`, env.RIOT_API_KEY),
     ]);
     const [matches, version] = await Promise.all([
-      Promise.all(matchIds.map((id) => riotFetch<RiotMatch>(`https://${routing}.api.riotgames.com/lol/match/v5/matches/${id}`, env.RIOT_API_KEY))),
+      detailsInBatches(matchIds, routing, env.RIOT_API_KEY),
       dataDragonVersion().catch(() => null),
     ]);
+    const championData = version ? await fetch(`https://ddragon.leagueoflegends.com/cdn/${version}/data/en_US/champion.json`).then((response) => response.ok ? response.json<{ data: Record<string, DataDragonChampion> }>() : null).catch(() => null) : null;
+    const championsById = new Map(Object.values(championData?.data ?? {}).map((champion) => [Number(champion.key), champion]));
     const solo = leagues.find((entry) => entry.queueType === "RANKED_SOLO_5x5");
     const data = {
       profile: { gameName: account.gameName, tagLine: account.tagLine, summonerLevel: summoner.summonerLevel, profileIconId: summoner.profileIconId, region },
       rank: solo ? { tier: solo.tier, rank: solo.rank, leaguePoints: solo.leaguePoints, wins: solo.wins, losses: solo.losses } : null,
       dataDragonVersion: version,
+      mastery: mastery.map((entry) => {
+        const champion = championsById.get(entry.championId);
+        return { champion: champion?.name === "Wukong" ? "Wukong" : champion?.name ?? "Unknown champion", championAsset: champion?.id ?? "", points: entry.championPoints, lastPlayedAt: new Date(entry.lastPlayTime).toISOString() };
+      }),
       matches: matches.map((match) => {
         const player = match.info.participants.find((participant) => participant.puuid === account.puuid);
         if (!player) return null;
-        return { id: match.metadata.matchId, champion: player.championName === "MonkeyKing" ? "Wukong" : player.championName, championAsset: player.championName, kills: player.kills, deaths: player.deaths, assists: player.assists, win: player.win, cs: player.totalMinionsKilled + player.neutralMinionsKilled, role: player.teamPosition || "-", durationSeconds: match.info.gameDuration, queueId: match.info.queueId, playedAt: new Date(match.info.gameCreation).toISOString() };
+        const teamKills = match.info.participants.filter((participant) => participant.teamId === player.teamId).reduce((total, participant) => total + participant.kills, 0);
+        return { id: match.metadata.matchId, champion: player.championName === "MonkeyKing" ? "Wukong" : player.championName, championAsset: player.championName, kills: player.kills, deaths: player.deaths, assists: player.assists, killParticipation: teamKills ? (player.kills + player.assists) / teamKills : null, win: player.win, cs: player.totalMinionsKilled + player.neutralMinionsKilled, role: player.teamPosition || "-", durationSeconds: match.info.gameDuration, queueId: match.info.queueId, playedAt: new Date(match.info.gameCreation).toISOString() };
       }).filter((match): match is NonNullable<typeof match> => match !== null),
     };
     const response = json(data);
