@@ -86,8 +86,6 @@ function riotError(error: unknown) {
 
 async function summonerLookup(request: Request, env: Env, url: URL) {
   if (!env.RIOT_API_KEY) return json({ error: "Riot API is not configured yet." }, 503);
-  const cached = await caches.default.match(request);
-  if (cached) return cached;
   const gameName = url.searchParams.get("gameName")?.trim() ?? "";
   const tagLine = url.searchParams.get("tagLine")?.trim() ?? "";
   const region = url.searchParams.get("region")?.toUpperCase() as RiotRegion;
@@ -125,8 +123,7 @@ async function summonerLookup(request: Request, env: Env, url: URL) {
       }).filter((match): match is NonNullable<typeof match> => match !== null),
     };
     const response = json(data);
-    response.headers.set("cache-control", "public, max-age=180");
-    await caches.default.put(request, response.clone());
+    response.headers.set("cache-control", "no-store");
     return response;
   } catch (error) {
     const [message, status] = riotError(error);
