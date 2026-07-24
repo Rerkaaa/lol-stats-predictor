@@ -6,6 +6,7 @@ export interface Env {
   DB: D1Database;
   ASSETS: Fetcher;
   IMPORT_TOKEN?: string;
+  RIOT_API_KEY?: string;
 }
 
 type TeamRow = { id: number; name: string };
@@ -19,6 +20,10 @@ type RecentMapRow = {
   blueBarons: number | null; redBarons: number | null; blueTowers: number | null; redTowers: number | null;
 };
 type RecentPlayerRow = { matchId: number; teamId: number; playerName: string; role: string | null; champion: string | null; kills: number | null; deaths: number | null; assists: number | null; cs: number | null; gold: number | null; damage: number | null; visionScore: number | null };
+type RiotAccount = { puuid: string; gameName: string; tagLine: string };
+type RiotSummoner = { profileIconId: number; summonerLevel: number };
+type RiotLeagueEntry = { queueType: string; tier: string; rank: string; leaguePoints: number; wins: number; losses: number };
+type RiotMatch = { metadata: { matchId: string }; info: { gameCreation: number; gameDuration: number; queueId: number; participants: Array<{ puuid: string; championName: string; kills: number; deaths: number; assists: number; win: boolean; totalMinionsKilled: number; neutralMinionsKilled: number; teamPosition: string }> } };
 
 type StartImportBody = { year?: number; sourceUrl?: string; sourceHash?: string };
 type ChangedGamesBody = StartImportBody & { games?: Array<{ gameId?: string; sourceHash?: string }> };
@@ -33,6 +38,70 @@ const validStart = (body: StartImportBody) => Number.isInteger(body.year) && (bo
 
 const authorized = (request: Request, env: Env) =>
   !!env.IMPORT_TOKEN && request.headers.get("authorization") === `Bearer ${env.IMPORT_TOKEN}`;
+
+const riotRouting = {
+  BR1: ["br1", "americas"], LA1: ["la1", "americas"], LA2: ["la2", "americas"], NA1: ["na1", "americas"],
+  EUW1: ["euw1", "europe"], EUN1: ["eun1", "europe"], TR1: ["tr1", "europe"], RU: ["ru", "europe"],
+  JP1: ["jp1", "asia"], KR: ["kr", "asia"], OC1: ["oc1", "sea"], PH2: ["ph2", "sea"], SG2: ["sg2", "sea"], TH2: ["th2", "sea"], TW2: ["tw2", "sea"], VN2: ["vn2", "sea"],
+} as const;
+type RiotRegion = keyof typeof riotRouting;
+
+class RiotApiError extends Error {
+  constructor(readonly status: number) { super(`Riot API request failed with ${status}`); }
+}
+
+async function riotFetch<T>(url: string, apiKey: string) {
+  const response = await fetch(url, { headers: { "X-Riot-Token": apiKey } });
+  if (!response.ok) throw new RiotApiError(response.status);
+  return response.json<T>();
+}
+
+function riotError(error: unknown) {
+  if (error instanceof RiotApiError) {
+    if (error.status === 404) return ["That Riot ID was not found in the selected region.", 404] as const;
+    if (error.status === 429) return ["Riot's API rate limit was reached. Please try again in a moment.", 429] as const;
+    if (error.status === 401 || error.status === 403) return ["The Riot API key is unavailable or has expired. Add a new key and try again.", 503] as const;
+  }
+  return ["Riot data is temporarily unavailable. Please try again.", 502] as const;
+}
+
+async function summonerLookup(request: Request, env: Env, url: URL) {
+  if (!env.RIOT_API_KEY) return json({ error: "Riot API is not configured yet." }, 503);
+  const cached = await caches.default.match(request);
+  if (cached) return cached;
+  const gameName = url.searchParams.get("gameName")?.trim() ?? "";
+  const tagLine = url.searchParams.get("tagLine")?.trim() ?? "";
+  const region = url.searchParams.get("region")?.toUpperCase() as RiotRegion;
+  if (!gameName || !tagLine || gameName.length > 30 || tagLine.length > 10 || !(region in riotRouting)) return json({ error: "Enter a Riot ID, tag, and supported region." }, 400);
+  const [platform, routing] = riotRouting[region];
+  const encodedName = encodeURIComponent(gameName), encodedTag = encodeURIComponent(tagLine);
+  try {
+    const account = await riotFetch<RiotAccount>(`https://${routing}.api.riotgames.com/riot/account/v1/accounts/by-riot-id/${encodedName}/${encodedTag}`, env.RIOT_API_KEY);
+    const [summoner, leagues, matchIds] = await Promise.all([
+      riotFetch<RiotSummoner>(`https://${platform}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/${account.puuid}`, env.RIOT_API_KEY),
+      riotFetch<RiotLeagueEntry[]>(`https://${platform}.api.riotgames.com/lol/league/v4/entries/by-puuid/${account.puuid}`, env.RIOT_API_KEY),
+      riotFetch<string[]>(`https://${routing}.api.riotgames.com/lol/match/v5/matches/by-puuid/${account.puuid}/ids?start=0&count=8`, env.RIOT_API_KEY),
+    ]);
+    const matches = await Promise.all(matchIds.map((id) => riotFetch<RiotMatch>(`https://${routing}.api.riotgames.com/lol/match/v5/matches/${id}`, env.RIOT_API_KEY)));
+    const solo = leagues.find((entry) => entry.queueType === "RANKED_SOLO_5x5");
+    const data = {
+      profile: { gameName: account.gameName, tagLine: account.tagLine, summonerLevel: summoner.summonerLevel, profileIconId: summoner.profileIconId, region },
+      rank: solo ? { tier: solo.tier, rank: solo.rank, leaguePoints: solo.leaguePoints, wins: solo.wins, losses: solo.losses } : null,
+      matches: matches.map((match) => {
+        const player = match.info.participants.find((participant) => participant.puuid === account.puuid);
+        if (!player) return null;
+        return { id: match.metadata.matchId, champion: player.championName, kills: player.kills, deaths: player.deaths, assists: player.assists, win: player.win, cs: player.totalMinionsKilled + player.neutralMinionsKilled, role: player.teamPosition || "-", durationSeconds: match.info.gameDuration, queueId: match.info.queueId, playedAt: new Date(match.info.gameCreation).toISOString() };
+      }).filter((match): match is NonNullable<typeof match> => match !== null),
+    };
+    const response = json(data);
+    response.headers.set("cache-control", "public, max-age=180");
+    await caches.default.put(request, response.clone());
+    return response;
+  } catch (error) {
+    const [message, status] = riotError(error);
+    return json({ error: message }, status);
+  }
+}
 
 async function currentPatch(db: D1Database) {
   return db.prepare("SELECT patch,played_at playedAt FROM matches WHERE source_game_id LIKE 'oracle:%' AND played_at>='2022-01-01' AND patch IS NOT NULL AND patch<>'' ORDER BY played_at DESC LIMIT 1").first<{ patch: string; playedAt: string | null }>();
@@ -230,6 +299,7 @@ export default {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/api/admin/oracle/")) return handleOracleAdmin(request, env, url.pathname);
     if (url.pathname === "/api/health") return json({ ok: true, source: "Oracle's Elixir", coverage: "2022+" });
+    if (url.pathname === "/api/summoner") return summonerLookup(request, env, url);
     if (url.pathname === "/api/import/status") {
       const { results } = await env.DB
         .prepare("SELECT source_year,status,source_hash,rows_received,rows_rejected,games_received,games_skipped,last_error,source_url,started_at,completed_at FROM oracle_import_runs ORDER BY source_year DESC")
