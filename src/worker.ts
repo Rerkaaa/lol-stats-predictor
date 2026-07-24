@@ -68,11 +68,12 @@ async function dataDragonVersion() {
 const pause = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
 async function detailsInBatches(ids: string[], routing: string, apiKey: string) {
-  const load = (batch: string[]) => Promise.all(batch.map((id) => riotFetch<RiotMatch>(`https://${routing}.api.riotgames.com/lol/match/v5/matches/${id}`, apiKey)));
-  const first = await load(ids.slice(0, 12));
-  if (ids.length <= 12) return first;
-  await pause(1100);
-  return [...first, ...await load(ids.slice(12))];
+  const details: RiotMatch[] = [];
+  for (const id of ids) {
+    details.push(await riotFetch<RiotMatch>(`https://${routing}.api.riotgames.com/lol/match/v5/matches/${id}`, apiKey));
+    await pause(90);
+  }
+  return details;
 }
 
 function riotError(error: unknown) {
