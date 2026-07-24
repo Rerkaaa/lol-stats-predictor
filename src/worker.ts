@@ -56,6 +56,13 @@ async function riotFetch<T>(url: string, apiKey: string) {
   return response.json<T>();
 }
 
+async function dataDragonVersion() {
+  const response = await fetch("https://ddragon.leagueoflegends.com/api/versions.json");
+  if (!response.ok) return null;
+  const versions = await response.json<string[]>();
+  return versions[0] ?? null;
+}
+
 function riotError(error: unknown) {
   if (error instanceof RiotApiError) {
     if (error.status === 404) return ["That Riot ID was not found in the selected region.", 404] as const;
@@ -82,15 +89,19 @@ async function summonerLookup(request: Request, env: Env, url: URL) {
       riotFetch<RiotLeagueEntry[]>(`https://${platform}.api.riotgames.com/lol/league/v4/entries/by-puuid/${account.puuid}`, env.RIOT_API_KEY),
       riotFetch<string[]>(`https://${routing}.api.riotgames.com/lol/match/v5/matches/by-puuid/${account.puuid}/ids?start=0&count=8`, env.RIOT_API_KEY),
     ]);
-    const matches = await Promise.all(matchIds.map((id) => riotFetch<RiotMatch>(`https://${routing}.api.riotgames.com/lol/match/v5/matches/${id}`, env.RIOT_API_KEY)));
+    const [matches, version] = await Promise.all([
+      Promise.all(matchIds.map((id) => riotFetch<RiotMatch>(`https://${routing}.api.riotgames.com/lol/match/v5/matches/${id}`, env.RIOT_API_KEY))),
+      dataDragonVersion().catch(() => null),
+    ]);
     const solo = leagues.find((entry) => entry.queueType === "RANKED_SOLO_5x5");
     const data = {
       profile: { gameName: account.gameName, tagLine: account.tagLine, summonerLevel: summoner.summonerLevel, profileIconId: summoner.profileIconId, region },
       rank: solo ? { tier: solo.tier, rank: solo.rank, leaguePoints: solo.leaguePoints, wins: solo.wins, losses: solo.losses } : null,
+      dataDragonVersion: version,
       matches: matches.map((match) => {
         const player = match.info.participants.find((participant) => participant.puuid === account.puuid);
         if (!player) return null;
-        return { id: match.metadata.matchId, champion: player.championName, kills: player.kills, deaths: player.deaths, assists: player.assists, win: player.win, cs: player.totalMinionsKilled + player.neutralMinionsKilled, role: player.teamPosition || "-", durationSeconds: match.info.gameDuration, queueId: match.info.queueId, playedAt: new Date(match.info.gameCreation).toISOString() };
+        return { id: match.metadata.matchId, champion: player.championName === "MonkeyKing" ? "Wukong" : player.championName, championAsset: player.championName, kills: player.kills, deaths: player.deaths, assists: player.assists, win: player.win, cs: player.totalMinionsKilled + player.neutralMinionsKilled, role: player.teamPosition || "-", durationSeconds: match.info.gameDuration, queueId: match.info.queueId, playedAt: new Date(match.info.gameCreation).toISOString() };
       }).filter((match): match is NonNullable<typeof match> => match !== null),
     };
     const response = json(data);
