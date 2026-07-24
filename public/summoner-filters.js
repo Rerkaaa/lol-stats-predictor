@@ -28,7 +28,10 @@
       filters.querySelector('.filter-count').textContent = `${shown} match${shown === 1 ? '' : 'es'} shown`;
     };
 
-    filters.querySelectorAll('select,input').forEach((input) => input.addEventListener('input', apply));
+    filters.querySelectorAll('select,input').forEach((input) => {
+      input.addEventListener('input', apply);
+      input.addEventListener('change', apply);
+    });
     section.querySelectorAll('[data-history]').forEach((button) => button.addEventListener('click', () => requestAnimationFrame(apply)));
     apply();
   };
