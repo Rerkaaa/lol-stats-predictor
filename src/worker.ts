@@ -24,7 +24,7 @@ type RiotAccount = { puuid: string; gameName: string; tagLine: string };
 type RiotSummoner = { id: string; profileIconId: number; summonerLevel: number };
 type RiotLeagueEntry = { queueType: string; tier: string; rank: string; leaguePoints: number; wins: number; losses: number };
 type RiotLeagueList = { entries: Array<{ summonerId: string; leaguePoints: number; wins: number; losses: number }> };
-type RiotMatch = { metadata: { matchId: string }; info: { gameCreation: number; gameDuration: number; gameMode: string; queueId: number; participants: Array<{ puuid: string; teamId: number; championName: string; championId: number; kills: number; deaths: number; assists: number; win: boolean; totalMinionsKilled: number; neutralMinionsKilled: number; teamPosition: string }> } };
+type RiotMatch = { metadata: { matchId: string }; info: { gameCreation: number; gameDuration: number; gameMode: string; queueId: number; participants: Array<{ puuid: string; teamId: number; championName: string; championId: number; kills: number; deaths: number; assists: number; win: boolean; totalMinionsKilled: number; neutralMinionsKilled: number; teamPosition: string; goldEarned: number; totalDamageDealtToChampions: number; visionScore: number; wardsPlaced: number; wardsKilled: number; item0: number; item1: number; item2: number; item3: number; item4: number; item5: number; item6: number }> } };
 type RiotMastery = { championId: number; championPoints: number; lastPlayTime: number };
 type DataDragonChampion = { key: string; name: string; id: string };
 type RankSnapshot = { seasonYear: number; tier: string | null; division: string | null; leaguePoints: number | null; wins: number | null; losses: number | null; capturedAt: string };
@@ -112,7 +112,7 @@ async function summonerLookup(request: Request, env: Env, url: URL) {
   try {
     const account = await riotFetch<RiotAccount>(`https://${routing}.api.riotgames.com/riot/account/v1/accounts/by-riot-id/${encodedName}/${encodedTag}`, env.RIOT_API_KEY);
     const storedMatches = storedData?.matches ?? [];
-    const storedIds = new Set(storedMatches.map((match) => String(match.id)));
+    const storedById = new Map(storedMatches.map((match) => [String(match.id), match]));
     const olderStart = storedMatches.length;
     const [summoner, leagues, latestIds, olderIds, mastery] = await Promise.all([
       riotFetch<RiotSummoner>(`https://${platform}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/${account.puuid}`, env.RIOT_API_KEY),
@@ -121,12 +121,17 @@ async function summonerLookup(request: Request, env: Env, url: URL) {
       olderStart >= 20 && !storedData?.historyComplete ? riotFetch<string[]>(`https://${routing}.api.riotgames.com/lol/match/v5/matches/by-puuid/${account.puuid}/ids?start=${olderStart}&count=20`, env.RIOT_API_KEY) : Promise.resolve([]),
       riotFetch<RiotMastery[]>(`https://${platform}.api.riotgames.com/lol/champion-mastery/v4/player/${account.puuid}/top?count=5`, env.RIOT_API_KEY).catch((error) => error instanceof RiotApiError && error.status === 403 ? null : Promise.reject(error)),
     ]);
-    const matchIds = [...new Set([...latestIds, ...olderIds])].filter((id) => !storedIds.has(id));
+    const latestNeedingDetails = latestIds.filter((id) => storedById.get(id)?.gold == null);
+    const olderNewIds = olderIds.filter((id) => !storedById.has(id));
+    const matchIds = [...new Set([...latestNeedingDetails, ...olderNewIds])];
     const [matches, version] = await Promise.all([
       detailsInBatches(matchIds, routing, env.RIOT_API_KEY),
       dataDragonVersion().catch(() => null),
     ]);
-    const championData = version ? await fetch(`https://ddragon.leagueoflegends.com/cdn/${version}/data/en_US/champion.json`).then((response) => response.ok ? response.json<{ data: Record<string, DataDragonChampion> }>() : null).catch(() => null) : null;
+    const [championData, itemData] = version ? await Promise.all([
+      fetch(`https://ddragon.leagueoflegends.com/cdn/${version}/data/en_US/champion.json`).then((response) => response.ok ? response.json<{ data: Record<string, DataDragonChampion> }>() : null).catch(() => null),
+      fetch(`https://ddragon.leagueoflegends.com/cdn/${version}/data/en_US/item.json`).then((response) => response.ok ? response.json<{ data: Record<string, { name: string }> }>() : null).catch(() => null),
+    ]) : [null, null];
     const championsById = new Map(Object.values(championData?.data ?? {}).map((champion) => [Number(champion.key), champion]));
     const solo = leagues.find((entry) => entry.queueType === "RANKED_SOLO_5x5");
     const ladder = solo && ["MASTER", "GRANDMASTER", "CHALLENGER"].includes(solo.tier)
@@ -148,8 +153,9 @@ async function summonerLookup(request: Request, env: Env, url: URL) {
         const player = match.info.participants.find((participant) => participant.puuid === account.puuid);
         if (!player) return null;
         const teamKills = match.info.participants.filter((participant) => participant.teamId === player.teamId).reduce((total, participant) => total + participant.kills, 0);
-        return { id: match.metadata.matchId, champion: player.championName === "MonkeyKing" ? "Wukong" : player.championName, championAsset: player.championName, kills: player.kills, deaths: player.deaths, assists: player.assists, killParticipation: teamKills ? (player.kills + player.assists) / teamKills : null, win: player.win, cs: player.totalMinionsKilled + player.neutralMinionsKilled, role: player.teamPosition || "-", durationSeconds: match.info.gameDuration, queueId: match.info.queueId, gameMode: match.info.gameMode, playedAt: new Date(match.info.gameCreation).toISOString() };
-      }).filter((match): match is NonNullable<typeof match> => match !== null), ...storedMatches].sort((left, right) => String(right.playedAt).localeCompare(String(left.playedAt))),
+        const itemIds = [player.item0, player.item1, player.item2, player.item3, player.item4, player.item5, player.item6].filter((id) => id > 0);
+        return { id: match.metadata.matchId, champion: player.championName === "MonkeyKing" ? "Wukong" : player.championName, championAsset: player.championName, kills: player.kills, deaths: player.deaths, assists: player.assists, killParticipation: teamKills ? (player.kills + player.assists) / teamKills : null, win: player.win, cs: player.totalMinionsKilled + player.neutralMinionsKilled, role: player.teamPosition || "-", durationSeconds: match.info.gameDuration, queueId: match.info.queueId, gameMode: match.info.gameMode, playedAt: new Date(match.info.gameCreation).toISOString(), gold: player.goldEarned, damage: player.totalDamageDealtToChampions, vision: player.visionScore, wardsPlaced: player.wardsPlaced, wardsKilled: player.wardsKilled, items: itemIds.map((id) => ({ id, name: itemData?.data[String(id)]?.name ?? `Item ${id}` })) };
+      }).filter((match): match is NonNullable<typeof match> => match !== null), ...storedMatches.filter((match) => !matchIds.includes(String(match.id)))].sort((left, right) => String(right.playedAt).localeCompare(String(left.playedAt))),
       historyComplete: storedData?.historyComplete === true || (olderStart >= 20 && olderIds.length < 20),
     };
     if (solo) {
