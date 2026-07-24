@@ -79,8 +79,20 @@ async function teamProfile(db: D1Database, id: number, patch: string | null, ref
   return profileTeam(team.id, team.name, games, roster, playerGames, patch, referenceDate);
 }
 
-async function latestSeries(db: D1Database) {
-  const { results = [] } = await db.prepare(
+type SeriesFilter = { teamId?: number; opponentId?: number };
+
+async function latestSeries(db: D1Database, filter: SeriesFilter = {}) {
+  const conditions = ["m.source_game_id LIKE 'oracle:%'", "m.played_at>='2022-01-01'"];
+  const bindings: number[] = [];
+  if (filter.teamId) {
+    conditions.push("(m.blue_team_id=? OR m.red_team_id=?)");
+    bindings.push(filter.teamId, filter.teamId);
+  }
+  if (filter.opponentId) {
+    conditions.push("(m.blue_team_id=? OR m.red_team_id=?)");
+    bindings.push(filter.opponentId, filter.opponentId);
+  }
+  const statement = db.prepare(
     `SELECT m.id matchId,m.played_at playedAt,m.stage,m.patch,m.duration_seconds durationSeconds,
       m.blue_team_id blueTeamId,blue.name blueTeam,m.red_team_id redTeamId,red.name redTeam,m.winner_team_id winnerTeamId,
       blue_stats.kills blueKills,red_stats.kills redKills,blue_stats.dragons blueDragons,red_stats.dragons redDragons,
@@ -88,9 +100,10 @@ async function latestSeries(db: D1Database) {
      FROM matches m JOIN teams blue ON blue.id=m.blue_team_id JOIN teams red ON red.id=m.red_team_id
      LEFT JOIN team_game_stats blue_stats ON blue_stats.match_id=m.id AND blue_stats.team_id=m.blue_team_id
      LEFT JOIN team_game_stats red_stats ON red_stats.match_id=m.id AND red_stats.team_id=m.red_team_id
-     WHERE m.source_game_id LIKE 'oracle:%' AND m.played_at>='2022-01-01'
+     WHERE ${conditions.join(" AND ")}
      ORDER BY m.played_at DESC,m.id DESC LIMIT 80`,
-  ).all<RecentMapRow>();
+  );
+  const { results = [] } = await (bindings.length ? statement.bind(...bindings) : statement).all<RecentMapRow>();
   if (!results.length) return [];
   const { results: playerRows = [] } = await db.prepare(
     `SELECT match_id matchId,team_id teamId,player_name playerName,role,champion,kills,deaths,assists,cs,gold,damage,vision_score visionScore
@@ -230,6 +243,15 @@ export default {
       return json(results);
     }
     if (url.pathname === "/api/latest-series") return json(await latestSeries(env.DB));
+    if (url.pathname === "/api/match-history") {
+      const teamId = Number(url.searchParams.get("team"));
+      const opponentValue = url.searchParams.get("opponent");
+      const opponentId = opponentValue === null ? undefined : Number(opponentValue);
+      if (!Number.isInteger(teamId) || (opponentValue !== null && (!Number.isInteger(opponentId) || teamId === opponentId))) {
+        return json({ error: "Select one team, or two distinct teams." }, 400);
+      }
+      return json(await latestSeries(env.DB, { teamId, opponentId }));
+    }
     if (url.pathname === "/api/matchup") {
       const leftId = Number(url.searchParams.get("teamA"));
       const rightId = Number(url.searchParams.get("teamB"));
