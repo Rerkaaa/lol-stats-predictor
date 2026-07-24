@@ -195,7 +195,7 @@ async function fullMatchDetails(env: Env, url: URL) {
   const cached = await env.DB.prepare("SELECT payload_json FROM riot_match_detail_cache WHERE match_id=?").bind(matchId).first<{ payload_json: string }>();
   if (cached) {
     const payload = JSON.parse(cached.payload_json);
-    if (payload.timelinePlayers && payload.itemEvents && payload.players?.[0]?.runes) return json(payload);
+    if (payload.timelinePlayers && payload.itemEvents && payload.players?.[0]?.runes?.[0]?.description) return json(payload);
   }
   const [platform, routing] = riotRouting[region];
   try {
@@ -213,7 +213,7 @@ async function fullMatchDetails(env: Env, url: URL) {
     const players = match.info.participants.map((player: any) => {
       const itemIds = [player.item0, player.item1, player.item2, player.item3, player.item4, player.item5, player.item6].filter((id: number) => id > 0);
       const runeIds = player.perks?.styles?.flatMap((style: any) => style.selections?.map((selection: any) => selection.perk) ?? []) ?? [];
-      return { participantId: player.participantId, teamId: player.teamId, champion: player.championName === "MonkeyKing" ? "Wukong" : player.championName, championAsset: player.championName, summoner: player.riotIdGameName ? `${player.riotIdGameName}#${player.riotIdTagline ?? ""}` : player.summonerName, role: player.teamPosition || "-", win: player.win, kills: player.kills, deaths: player.deaths, assists: player.assists, gold: player.goldEarned, damage: player.totalDamageDealtToChampions, damageTaken: player.totalDamageTaken, vision: player.visionScore, wardsPlaced: player.wardsPlaced, wardsKilled: player.wardsKilled, cs: player.totalMinionsKilled + player.neutralMinionsKilled, items: itemIds.map((id: number) => ({ id, name: itemData?.data?.[String(id)]?.name ?? `Item ${id}` })), runes: runeIds.map((id: number) => ({ id, name: runeMap.get(id)?.name ?? `Rune ${id}`, icon: runeMap.get(id)?.icon ?? "" })) };
+      return { participantId: player.participantId, teamId: player.teamId, champion: player.championName === "MonkeyKing" ? "Wukong" : player.championName, championAsset: player.championName, summoner: player.riotIdGameName ? `${player.riotIdGameName}#${player.riotIdTagline ?? ""}` : player.summonerName, role: player.teamPosition || "-", win: player.win, kills: player.kills, deaths: player.deaths, assists: player.assists, gold: player.goldEarned, damage: player.totalDamageDealtToChampions, damageTaken: player.totalDamageTaken, vision: player.visionScore, wardsPlaced: player.wardsPlaced, wardsKilled: player.wardsKilled, cs: player.totalMinionsKilled + player.neutralMinionsKilled, items: itemIds.map((id: number) => ({ id, name: itemData?.data?.[String(id)]?.name ?? `Item ${id}` })), runes: runeIds.map((id: number) => ({ id, name: runeMap.get(id)?.name ?? `Rune ${id}`, icon: runeMap.get(id)?.icon ?? "", description: runeMap.get(id)?.longDesc ?? runeMap.get(id)?.shortDesc ?? "No description available." })) };
     });
     const timelineFrames = (timeline.info.frames ?? []).map((frame: any) => {
       const values = Object.values(frame.participantFrames ?? {}) as any[];
