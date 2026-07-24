@@ -44,7 +44,20 @@
       card.className = 'recent-champion-card';
       const image = lookupData.dataDragonVersion && champion.championAsset ? `<img src="https://ddragon.leagueoflegends.com/cdn/${encodeURIComponent(lookupData.dataDragonVersion)}/img/champion/${encodeURIComponent(champion.championAsset)}.png" alt="">` : '';
       card.innerHTML = `${image}<span class="recent-champion-name"><b>${champion.champion}</b><small>${role}</small></span><span><b>${champion.games} game${champion.games === 1 ? '' : 's'}</b><small>${winRate}% WR</small></span><span><b>${kda} KDA</b><small>${csPerMinute} CS/min</small></span>`;
-      card.addEventListener('click', () => window.dispatchEvent(new CustomEvent('summoner:champion-filter', { detail: champion.champion })));
+      card.addEventListener('click', () => {
+        const history = output.querySelector('#lookupHistory');
+        const historySection = history?.closest('.lookup-section');
+        const filters = historySection?.querySelector('.summoner-filters');
+        if (!historySection || !filters) return;
+        filters.querySelector('[data-filter="queue"]').value = 'all';
+        filters.querySelector('[data-filter="role"]').value = 'all';
+        filters.querySelector('[data-filter="champion"]').value = champion.champion;
+        historySection.querySelector('[data-history="all"]')?.click();
+        requestAnimationFrame(() => {
+          filters.querySelector('[data-filter="champion"]').dispatchEvent(new Event('input', { bubbles: true }));
+          historySection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+      });
       list.append(card);
     });
     const trends = output.querySelector('.recent-form');
