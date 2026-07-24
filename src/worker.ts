@@ -187,6 +187,40 @@ async function summonerLookup(request: Request, env: Env, url: URL) {
   }
 }
 
+async function fullMatchDetails(env: Env, url: URL) {
+  if (!env.RIOT_API_KEY) return json({ error: "Riot API is not configured yet." }, 503);
+  const region = url.searchParams.get("region")?.toUpperCase() as RiotRegion;
+  const matchId = url.searchParams.get("matchId") ?? "";
+  if (!(region in riotRouting) || !/^[A-Za-z0-9_:-]+$/.test(matchId)) return json({ error: "Invalid match request." }, 400);
+  const cached = await env.DB.prepare("SELECT payload_json FROM riot_match_detail_cache WHERE match_id=?").bind(matchId).first<{ payload_json: string }>();
+  if (cached) return json(JSON.parse(cached.payload_json));
+  const [platform, routing] = riotRouting[region];
+  try {
+    const [match, timeline, version] = await Promise.all([
+      riotFetch<any>(`https://${routing}.api.riotgames.com/lol/match/v5/matches/${encodeURIComponent(matchId)}`, env.RIOT_API_KEY),
+      riotFetch<any>(`https://${routing}.api.riotgames.com/lol/match/v5/matches/${encodeURIComponent(matchId)}/timeline`, env.RIOT_API_KEY),
+      dataDragonVersion().catch(() => null),
+    ]);
+    const itemData = version ? await fetch(`https://ddragon.leagueoflegends.com/cdn/${version}/data/en_US/item.json`).then((response) => response.ok ? response.json<any>() : null).catch(() => null) : null;
+    const players = match.info.participants.map((player: any) => {
+      const itemIds = [player.item0, player.item1, player.item2, player.item3, player.item4, player.item5, player.item6].filter((id: number) => id > 0);
+      return { participantId: player.participantId, teamId: player.teamId, champion: player.championName === "MonkeyKing" ? "Wukong" : player.championName, championAsset: player.championName, summoner: player.riotIdGameName ? `${player.riotIdGameName}#${player.riotIdTagline ?? ""}` : player.summonerName, role: player.teamPosition || "-", win: player.win, kills: player.kills, deaths: player.deaths, assists: player.assists, gold: player.goldEarned, damage: player.totalDamageDealtToChampions, damageTaken: player.totalDamageTaken, vision: player.visionScore, wardsPlaced: player.wardsPlaced, wardsKilled: player.wardsKilled, cs: player.totalMinionsKilled + player.neutralMinionsKilled, items: itemIds.map((id: number) => ({ id, name: itemData?.data?.[String(id)]?.name ?? `Item ${id}` })) };
+    });
+    const timelineFrames = (timeline.info.frames ?? []).map((frame: any) => {
+      const values = Object.values(frame.participantFrames ?? {}) as any[];
+      const blue = values.filter((value) => Number(value.participantId) <= 5), red = values.filter((value) => Number(value.participantId) > 5);
+      const sum = (rows: any[], field: string) => rows.reduce((total, row) => total + (Number(row[field]) || 0), 0);
+      return { minute: Math.round((frame.timestamp || 0) / 60000), blue: { gold: sum(blue, "totalGold"), xp: sum(blue, "xp"), cs: sum(blue, "minionsKilled") + sum(blue, "jungleMinionsKilled") }, red: { gold: sum(red, "totalGold"), xp: sum(red, "xp"), cs: sum(red, "minionsKilled") + sum(red, "jungleMinionsKilled") } };
+    });
+    const payload = { matchId, version, duration: match.info.gameDuration, queueId: match.info.queueId, gameMode: match.info.gameMode, playedAt: new Date(match.info.gameCreation).toISOString(), players, timeline: timelineFrames };
+    await env.DB.prepare("INSERT INTO riot_match_detail_cache(match_id,region,payload_json,updated_at) VALUES(?,?,?,?)").bind(matchId, region, JSON.stringify(payload), new Date().toISOString()).run();
+    return json(payload);
+  } catch (error) {
+    const [message, status] = riotError(error);
+    return json({ error: message }, status);
+  }
+}
+
 async function currentPatch(db: D1Database) {
   return db.prepare("SELECT patch,played_at playedAt FROM matches WHERE source_game_id LIKE 'oracle:%' AND played_at>='2022-01-01' AND patch IS NOT NULL AND patch<>'' ORDER BY played_at DESC LIMIT 1").first<{ patch: string; playedAt: string | null }>();
 }
@@ -384,6 +418,7 @@ export default {
     if (url.pathname.startsWith("/api/admin/oracle/")) return handleOracleAdmin(request, env, url.pathname);
     if (url.pathname === "/api/health") return json({ ok: true, source: "Oracle's Elixir", coverage: "2022+" });
     if (url.pathname === "/api/summoner") return summonerLookup(request, env, url);
+    if (url.pathname === "/api/summoner/match") return fullMatchDetails(env, url);
     if (url.pathname === "/api/import/status") {
       const { results } = await env.DB
         .prepare("SELECT source_year,status,source_hash,rows_received,rows_rejected,games_received,games_skipped,last_error,source_url,started_at,completed_at FROM oracle_import_runs ORDER BY source_year DESC")
