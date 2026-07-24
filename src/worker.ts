@@ -195,7 +195,7 @@ async function fullMatchDetails(env: Env, url: URL) {
   const cached = await env.DB.prepare("SELECT payload_json FROM riot_match_detail_cache WHERE match_id=?").bind(matchId).first<{ payload_json: string }>();
   if (cached) {
     const payload = JSON.parse(cached.payload_json);
-    if (payload.timelinePlayers && payload.itemEvents && payload.players?.[0]?.runes?.[0]?.description) return json(payload);
+    if (payload.timelinePlayers && payload.itemEvents && payload.objectiveEvents && payload.players?.[0]?.runes?.[0]?.description) return json(payload);
   }
   const [platform, routing] = riotRouting[region];
   try {
@@ -223,7 +223,8 @@ async function fullMatchDetails(env: Env, url: URL) {
     });
     const timelinePlayers = (timeline.info.frames ?? []).map((frame: any) => ({ minute: Math.round((frame.timestamp || 0) / 60000), players: Object.values(frame.participantFrames ?? {}).map((value: any) => ({ participantId: Number(value.participantId), gold: Number(value.totalGold) || 0, xp: Number(value.xp) || 0, cs: (Number(value.minionsKilled) || 0) + (Number(value.jungleMinionsKilled) || 0) })) }));
     const itemEvents = (timeline.info.frames ?? []).flatMap((frame: any) => (frame.events ?? []).filter((event: any) => ["ITEM_PURCHASED", "ITEM_SOLD", "ITEM_UNDO"].includes(event.type)).map((event: any) => ({ participantId: Number(event.participantId), minute: Math.round((event.timestamp || 0) / 60000), type: event.type, itemId: Number(event.itemId), itemName: itemData?.data?.[String(event.itemId)]?.name ?? `Item ${event.itemId}` })));
-    const payload = { matchId, version, duration: match.info.gameDuration, queueId: match.info.queueId, gameMode: match.info.gameMode, playedAt: new Date(match.info.gameCreation).toISOString(), players, timeline: timelineFrames, timelinePlayers, itemEvents };
+    const objectiveEvents = (timeline.info.frames ?? []).flatMap((frame: any) => (frame.events ?? []).filter((event: any) => event.type === "ELITE_MONSTER_KILL" || event.type === "BUILDING_KILL").map((event: any) => ({ minute: Math.round((event.timestamp || 0) / 60000), teamId: Number(event.killerTeamId) || (Number(event.killerId) <= 5 ? 100 : 200), label: event.type === "ELITE_MONSTER_KILL" ? event.monsterType : event.buildingType === "TOWER_BUILDING" ? "Tower" : "Inhibitor" })));
+    const payload = { matchId, version, duration: match.info.gameDuration, queueId: match.info.queueId, gameMode: match.info.gameMode, playedAt: new Date(match.info.gameCreation).toISOString(), players, timeline: timelineFrames, timelinePlayers, itemEvents, objectiveEvents };
     await env.DB.prepare("INSERT INTO riot_match_detail_cache(match_id,region,payload_json,updated_at) VALUES(?,?,?,?) ON CONFLICT(match_id) DO UPDATE SET region=excluded.region,payload_json=excluded.payload_json,updated_at=excluded.updated_at").bind(matchId, region, JSON.stringify(payload), new Date().toISOString()).run();
     return json(payload);
   } catch (error) {
