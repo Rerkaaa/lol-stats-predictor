@@ -1,0 +1,1 @@
+.champ-grid article[data-drilldown]{cursor:pointer;transition:transform .15s,border-color .15s}.champ-grid article[data-drilldown]:hover,.champ-grid article[data-drilldown]:focus-visible{transform:translateY(-2px);border-color:#66d4ff;outline:0}.clear-summoner-filters{padding:9px 12px;font-size:.82rem;background:#173b62;color:#e7f4ff;border:1px solid #35699a}
