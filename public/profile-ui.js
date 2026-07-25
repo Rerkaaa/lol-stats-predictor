@@ -44,5 +44,10 @@
     }
   };
 
-  new MutationObserver(improveProfile).observe(document.querySelector('#lookupResult'), { childList: true, subtree: true });
+  const normaliseRoles = () => {
+    document.querySelectorAll('.champion-cell span').forEach((role) => { role.textContent = role.textContent.replace(/^UTILITY\b/, 'SUPPORT'); });
+    document.querySelectorAll('.analytics .stat-card b').forEach((role) => { if (role.textContent.trim() === 'UTILITY') role.textContent = 'SUPPORT'; });
+  };
+
+  new MutationObserver(() => { improveProfile(); normaliseRoles(); }).observe(document.querySelector('#lookupResult'), { childList: true, subtree: true });
 })();
