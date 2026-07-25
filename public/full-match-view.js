@@ -22,6 +22,14 @@
     const blueGold = sum(blue, 'gold'), redGold = sum(red, 'gold');
     const teamDamage = { 100: sum(blue, 'damage'), 200: sum(red, 'damage') };
     const teamWon = (players) => Boolean(players[0]?.win);
+    const leading = (field) => [...data.players].sort((left, right) => Number(right[field] || 0) - Number(left[field] || 0))[0];
+    const label = (player) => player?.summoner || player?.champion || '—';
+    const teamLead = (left, right, field) => {
+      const difference = Math.abs(sum(left, field) - sum(right, field)), winner = sum(left, field) >= sum(right, field) ? 'Blue' : 'Red';
+      return `${winner} +${number(difference)}`;
+    };
+    const damageLeader = leading('damage'), visionLeader = leading('vision'), csLeader = leading('cs');
+    const insights = `<section class="analysis-insights" aria-label="Match highlights"><article class="insight-result ${teamWon(blue) ? 'blue' : 'red'}"><span>Result</span><b>${teamWon(blue) ? 'Blue victory' : 'Red victory'}</b><small>${duration(data.duration)} duration</small></article><article><span>Gold lead</span><b>${teamLead(blue, red, 'gold')}</b><small>${number(blueGold)} vs ${number(redGold)}</small></article><article><span>Fighting</span><b>${blueKills} — ${redKills}</b><small>${label(damageLeader)} led damage</small></article><article><span>Vision lead</span><b>${teamLead(blue, red, 'vision')}</b><small>${label(visionLeader)}: ${number(visionLeader?.vision)}</small></article><article><span>CS lead</span><b>${teamLead(blue, red, 'cs')}</b><small>${label(csLeader)}: ${number(csLeader?.cs)} CS</small></article></section>`;
     const row = (player) => {
       const kda = (player.kills + player.assists) / Math.max(1, player.deaths);
       const killShare = Math.round((player.kills + player.assists) / Math.max(1, sum(player.teamId === 100 ? blue : red, 'kills')) * 100);
@@ -32,7 +40,7 @@
     const teamTable = (players, side) => `<section class="analysis-team ${side}"><header><strong>${teamWon(players) ? 'Victory' : 'Defeat'}</strong> <span>(${side} team)</span><div class="analysis-columns"><span>Rating</span><span>KDA</span><span>Damage</span><span>Vision</span><span>CS</span><span>Items</span></div></header><table><tbody>${players.map(row).join('')}</tbody></table></section>`;
     const panel = document.createElement('section');
     panel.className = 'full-match-panel scorecard-match-panel';
-    panel.innerHTML = `<div class="full-match-head"><div><p class="eyebrow">Cached full match analysis</p><h2>Match overview</h2></div><button type="button" class="close-full-match">Close</button></div>${teamTable(blue, 'blue')}<div class="versus-totals"><div><b>${blueKills}</b><span>Total kills</span><b>${redKills}</b></div><div><b>${number(blueGold)}</b><span>Total gold</span><b>${number(redGold)}</b></div><small>${duration(data.duration)} game duration</small></div>${teamTable(red, 'red')}`;
+    panel.innerHTML = `<div class="full-match-head"><div><p class="eyebrow">Cached full match analysis</p><h2>Match overview</h2></div><button type="button" class="close-full-match">Close</button></div>${insights}${teamTable(blue, 'blue')}<div class="versus-totals"><div><b>${blueKills}</b><span>Total kills</span><b>${redKills}</b></div><div><b>${number(blueGold)}</b><span>Total gold</span><b>${number(redGold)}</b></div><small>${duration(data.duration)} game duration</small></div>${teamTable(red, 'red')}`;
     panel.querySelector('.close-full-match').addEventListener('click', () => panel.remove());
     panel.querySelectorAll('.analysis-player strong').forEach((nameElement, index) => {
       const riotId = [...blue, ...red][index]?.summoner;
@@ -100,5 +108,6 @@ document.head.insertAdjacentHTML('beforeend', `<style id="scorecard-heading-posi
 .scorecard-match-panel .analysis-team td{border-bottom:0!important}
 .scorecard-match-panel .analysis-team tr+tr .analysis-player{border-top:1px solid #29415e!important}
 .scorecard-match-panel .analysis-player::after{display:none!important}
+.scorecard-match-panel .analysis-insights{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:0 0 12px}.scorecard-match-panel .analysis-insights article{min-width:0;padding:10px 11px;border:1px solid #294d75;border-radius:7px;background:#101f35}.scorecard-match-panel .analysis-insights article.blue{background:linear-gradient(135deg,#143b68,#10233a)}.scorecard-match-panel .analysis-insights article.red{background:linear-gradient(135deg,#542238,#25182b)}.scorecard-match-panel .analysis-insights span,.scorecard-match-panel .analysis-insights b,.scorecard-match-panel .analysis-insights small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.scorecard-match-panel .analysis-insights span{color:#86add3;font-size:.65rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.scorecard-match-panel .analysis-insights b{margin:3px 0;color:#edf6ff;font-size:.9rem}.scorecard-match-panel .analysis-insights small{color:#93afd0;font-size:.69rem}.scorecard-match-panel .analysis-insights article.blue b{color:#7fbdff}.scorecard-match-panel .analysis-insights article.red b{color:#ff91a6}
 @media(max-width:850px){.scorecard-match-panel .analysis-columns{left:31.5%!important;width:68.5%!important;grid-template-columns:44px 67px 80px 57px 48px minmax(0,1fr)!important}}
 </style>`);
