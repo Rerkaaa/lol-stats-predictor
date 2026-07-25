@@ -34,6 +34,22 @@
     panel.className = 'full-match-panel scorecard-match-panel';
     panel.innerHTML = `<div class="full-match-head"><div><p class="eyebrow">Cached full match analysis</p><h2>Match overview</h2></div><button type="button" class="close-full-match">Close</button></div>${teamTable(blue, 'blue')}<div class="versus-totals"><div><b>${blueKills}</b><span>Total kills</span><b>${redKills}</b></div><div><b>${number(blueGold)}</b><span>Total gold</span><b>${number(redGold)}</b></div><small>${duration(data.duration)} game duration</small></div>${teamTable(red, 'red')}`;
     panel.querySelector('.close-full-match').addEventListener('click', () => panel.remove());
+    panel.querySelectorAll('.analysis-player strong').forEach((nameElement, index) => {
+      const riotId = [...blue, ...red][index]?.summoner;
+      if (!riotId || !riotId.includes('#')) return;
+      const link = document.createElement('button');
+      link.type = 'button'; link.className = 'analysis-player-link'; link.textContent = riotId;
+      link.addEventListener('click', () => {
+        const separator = riotId.lastIndexOf('#');
+        if (separator < 1 || !lookupData?.profile?.region) return;
+        document.querySelector('[data-view-button="lookup"]')?.click();
+        document.querySelector('#riotGameName').value = riotId.slice(0, separator);
+        document.querySelector('#riotTagLine').value = riotId.slice(separator + 1);
+        document.querySelector('#riotRegion').value = lookupData.profile.region;
+        document.querySelector('#lookupForm')?.requestSubmit();
+      });
+      nameElement.replaceChildren(link);
+    });
     return panel;
   };
 
@@ -78,6 +94,7 @@ document.head.insertAdjacentHTML('beforeend', `<style id="scorecard-heading-posi
 .scorecard-match-panel .analysis-player{position:relative!important;overflow:visible!important}
 .scorecard-match-panel .analysis-player>div{position:absolute!important;left:44px;top:5px;width:340px;z-index:1}
 .scorecard-match-panel .analysis-player strong{white-space:normal!important;overflow:visible!important;text-overflow:clip!important;overflow-wrap:anywhere}
+.scorecard-match-panel .analysis-player-link{display:inline;padding:0;border:0;background:transparent;color:#eef7ff;font:inherit;font-weight:inherit;text-align:left;text-decoration:none;cursor:pointer}.scorecard-match-panel .analysis-player-link:hover,.scorecard-match-panel .analysis-player-link:focus-visible{color:#66d4ff;text-decoration:underline;outline:0}
 .scorecard-match-panel .analysis-team tr+tr .analysis-player,.scorecard-match-panel .analysis-player>div,.scorecard-match-panel .analysis-player strong,.scorecard-match-panel .analysis-player small{border:0!important;box-shadow:none!important}
 .scorecard-match-panel .analysis-player::after{content:"";position:absolute;left:0;bottom:0;width:400px;height:1px;background:#29415e;pointer-events:none}
 .scorecard-match-panel .analysis-team td{border-bottom:0!important}
