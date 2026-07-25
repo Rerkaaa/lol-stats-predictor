@@ -63,3 +63,13 @@
   };
   new MutationObserver(() => requestAnimationFrame(wire)).observe(document.querySelector('#lookupResult'), { childList: true, subtree: true });
 })();
+
+// Keep the scorecard headings locked to the exact player-column widths.
+// This is injected after the older match-analysis styles so those legacy rules
+// cannot compress or shift the new scorecard columns.
+document.head.insertAdjacentHTML('beforeend', `<style id="scorecard-column-lock">
+.scorecard-match-panel .analysis-team table,.scorecard-match-panel .analysis-team tbody{display:block!important;width:100%!important}
+.scorecard-match-panel .analysis-team tr{display:grid!important;grid-template-columns:170px 66px 105px 126px 86px 70px minmax(0,1fr)!important;min-height:52px!important}
+.scorecard-match-panel .analysis-team td{width:auto!important;min-width:0!important}
+@media(max-width:850px){.scorecard-match-panel .analysis-team tr{grid-template-columns:150px 55px 90px 105px 74px 56px minmax(0,1fr)!important}}
+</style>`);
