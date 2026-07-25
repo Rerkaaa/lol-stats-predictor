@@ -75,6 +75,9 @@ document.head.insertAdjacentHTML('beforeend', `<style id="scorecard-heading-posi
 .scorecard-match-panel .analysis-columns span:nth-child(3){transform:translateX(25px)}
 .scorecard-match-panel .analysis-columns span:nth-child(4){transform:translateX(45px)}
 .scorecard-match-panel .analysis-columns span:nth-child(5),.scorecard-match-panel .analysis-columns span:nth-child(6){transform:translateX(52px)}
+.scorecard-match-panel .analysis-player{position:relative!important;overflow:visible!important}
+.scorecard-match-panel .analysis-player>div{position:absolute!important;left:44px;top:5px;width:340px;z-index:1}
 .scorecard-match-panel .analysis-player strong{white-space:normal!important;overflow:visible!important;text-overflow:clip!important;overflow-wrap:anywhere}
+.scorecard-match-panel .analysis-player::after{content:"";position:absolute;left:0;bottom:-5px;width:400px;border-bottom:1px solid #29415e;pointer-events:none}
 @media(max-width:850px){.scorecard-match-panel .analysis-columns{left:31.5%!important;width:68.5%!important;grid-template-columns:44px 67px 80px 57px 48px minmax(0,1fr)!important}}
 </style>`);
