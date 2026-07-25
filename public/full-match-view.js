@@ -70,6 +70,6 @@ document.head.insertAdjacentHTML('beforeend', `<style id="scorecard-heading-posi
 .scorecard-match-panel .analysis-team header{display:block!important;position:relative!important}
 .scorecard-match-panel .analysis-team header>strong{position:absolute;left:12px;top:10px}
 .scorecard-match-panel .analysis-team header>span{position:absolute;left:64px;top:10px;margin:0!important}
-.scorecard-match-panel .analysis-columns{margin-left:14%!important;height:36px;align-items:center;grid-template-columns:9% 8% 13% 8% 7% 1fr!important}
-@media(max-width:850px){.scorecard-match-panel .analysis-columns{margin-left:14%!important}}
+.scorecard-match-panel .analysis-columns{position:absolute!important;left:31.5%!important;top:0!important;width:68.5%!important;height:36px;align-items:center;grid-template-columns:50px 78px 94px 65px 54px minmax(0,1fr)!important}
+@media(max-width:850px){.scorecard-match-panel .analysis-columns{left:31.5%!important;width:68.5%!important;grid-template-columns:44px 67px 80px 57px 48px minmax(0,1fr)!important}}
 </style>`);
