@@ -104,9 +104,14 @@ async function summonerLookup(request: Request, env: Env, url: URL) {
   if (!gameName || !tagLine || gameName.length > 30 || tagLine.length > 10 || !(region in riotRouting)) return json({ error: "Enter a Riot ID, tag, and supported region." }, 400);
   const lookupKey = `${region}:${gameName.toLocaleLowerCase()}:${tagLine.toLocaleLowerCase()}`;
   const refresh = url.searchParams.get("refresh") === "1";
+  const offset = Math.max(0, Number(url.searchParams.get("offset") ?? "0") || 0);
+  const limit = Math.min(20, Math.max(1, Number(url.searchParams.get("limit") ?? "20") || 20));
   const stored = await env.DB.prepare("SELECT payload_json FROM summoner_lookup_cache WHERE lookup_key=?").bind(lookupKey).first<{ payload_json: string }>();
   const storedData = stored ? JSON.parse(stored.payload_json) as { matches?: Array<Record<string, any>>; historyComplete?: boolean } : null;
-  if (!refresh && storedData) return json(storedData);
+  if (!refresh && storedData) {
+    const allMatches = storedData.matches ?? [];
+    return json({ ...storedData, matches: allMatches.slice(offset, offset + limit), storedGames: allMatches.length, historyPage: { offset, limit, total: allMatches.length } });
+  }
   const [platform, routing] = riotRouting[region];
   const encodedName = encodeURIComponent(gameName), encodedTag = encodeURIComponent(tagLine);
   try {
@@ -178,7 +183,7 @@ async function summonerLookup(request: Request, env: Env, url: URL) {
       `INSERT INTO summoner_lookup_cache(lookup_key,region,game_name,tag_line,payload_json,updated_at)
        VALUES(?,?,?,?,?,?) ON CONFLICT(lookup_key) DO UPDATE SET payload_json=excluded.payload_json,updated_at=excluded.updated_at`,
     ).bind(lookupKey, region, account.gameName, account.tagLine, JSON.stringify(data), updatedAt).run();
-    const response = json(data);
+    const response = json({ ...data, matches: data.matches.slice(offset, offset + limit), storedGames: data.matches.length, historyPage: { offset, limit, total: data.matches.length } });
     response.headers.set("cache-control", "no-store");
     return response;
   } catch (error) {
