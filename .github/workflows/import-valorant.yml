@@ -1,0 +1,54 @@
+name: Sync Valorant VCT data
+
+on:
+  workflow_dispatch:
+    inputs:
+      season:
+        description: "2025, 2026, or leave blank for both years"
+        required: false
+        type: string
+      event_limit:
+        description: "VCT events to inspect (use 5 for a test; blank uses 60)"
+        required: false
+        type: string
+      match_limit:
+        description: "Completed series to import (use 10 for a test; blank uses 800)"
+        required: false
+        type: string
+  schedule:
+    - cron: "17 1 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: valorant-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Collect completed 2025–2026 VCT maps
+        env:
+          VALORANT_IMPORT_URL: ${{ secrets.ORACLE_IMPORT_URL }}
+          VALORANT_IMPORT_TOKEN: ${{ secrets.ORACLE_IMPORT_TOKEN }}
+          VLR_EVENT_LIMIT: ${{ inputs.event_limit }}
+          VLR_MATCH_LIMIT: ${{ inputs.match_limit }}
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.season }}" ]]; then
+            node scripts/import-valorant-vlr.mjs "${{ inputs.season }}"
+          else
+            node scripts/import-valorant-vlr.mjs 2025 2026
+          fi
