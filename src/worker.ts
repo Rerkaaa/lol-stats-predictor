@@ -513,6 +513,45 @@ async function handleValorantAdmin(request: Request, env: Env) {
   }
 }
 
+async function valorantMapPool(db: D1Database, teamA: number, teamB: number) {
+  const { results = [] } = await db.prepare(
+    `SELECT m.map_name name,
+      SUM(CASE WHEN s.team_a_id=? OR s.team_b_id=? THEN 1 ELSE 0 END) teamAGames,
+      SUM(CASE WHEN m.winner_team_id=? THEN 1 ELSE 0 END) teamAWins,
+      AVG(CASE WHEN s.team_a_id=? THEN m.team_a_score-m.team_b_score WHEN s.team_b_id=? THEN m.team_b_score-m.team_a_score END) teamARoundDiff,
+      SUM(CASE WHEN s.team_a_id=? OR s.team_b_id=? THEN 1 ELSE 0 END) teamBGames,
+      SUM(CASE WHEN m.winner_team_id=? THEN 1 ELSE 0 END) teamBWins,
+      AVG(CASE WHEN s.team_a_id=? THEN m.team_a_score-m.team_b_score WHEN s.team_b_id=? THEN m.team_b_score-m.team_a_score END) teamBRoundDiff
+     FROM valorant_maps m JOIN valorant_series s ON s.id=m.series_id
+     WHERE s.played_at>='2025-01-01' AND (s.team_a_id IN (?,?) OR s.team_b_id IN (?,?))
+     GROUP BY m.map_name ORDER BY m.map_name`,
+  ).bind(teamA, teamA, teamA, teamA, teamA, teamB, teamB, teamB, teamB, teamB, teamA, teamB, teamA, teamB).all();
+  return results;
+}
+
+async function latestValorantSeries(db: D1Database) {
+  const { results: series = [] } = await db.prepare(
+    `SELECT s.id,s.played_at playedAt,s.event_name event,s.best_of bestOf,s.team_a_score teamAScore,s.team_b_score teamBScore,a.name teamA,b.name teamB,w.name winner
+     FROM valorant_series s JOIN valorant_teams a ON a.id=s.team_a_id JOIN valorant_teams b ON b.id=s.team_b_id LEFT JOIN valorant_teams w ON w.id=s.winner_team_id ORDER BY s.played_at DESC LIMIT 18`,
+  ).all<any>();
+  if (!series.length) return [];
+  const ids = series.map((row: any) => row.id);
+  const { results: maps = [] } = await db.prepare(
+    `SELECT m.id,m.series_id seriesId,m.map_number number,m.map_name name,m.team_a_score teamAScore,m.team_b_score teamBScore,a.name teamA,b.name teamB,w.name winner
+     FROM valorant_maps m JOIN valorant_series s ON s.id=m.series_id JOIN valorant_teams a ON a.id=s.team_a_id JOIN valorant_teams b ON b.id=s.team_b_id LEFT JOIN valorant_teams w ON w.id=m.winner_team_id WHERE m.series_id IN (${ids.map(() => "?").join(",")}) ORDER BY m.series_id,m.map_number`,
+  ).bind(...ids).all<any>();
+  const mapIds = maps.map((row: any) => row.id);
+  const { results: players = [] } = mapIds.length ? await db.prepare(
+    `SELECT p.map_id mapId,p.player_name player,p.agent,p.acs,p.kills,p.deaths,p.assists,t.name team FROM valorant_player_maps p JOIN valorant_teams t ON t.id=p.team_id WHERE p.map_id IN (${mapIds.map(() => "?").join(",")}) ORDER BY p.map_id,p.team_id,p.acs DESC`,
+  ).bind(...mapIds).all<any>() : { results: [] };
+  const byMap = new Map<number, any[]>();
+  for (const map of maps) byMap.set(map.id, []);
+  for (const player of players) byMap.get(player.mapId)?.push(player);
+  const mapsBySeries = new Map<number, any[]>();
+  for (const map of maps) mapsBySeries.set(map.seriesId, [...(mapsBySeries.get(map.seriesId) ?? []), { ...map, players: byMap.get(map.id) ?? [] }]);
+  return series.map((row: any) => ({ ...row, maps: mapsBySeries.get(row.id) ?? [] }));
+}
+
 export default {
   async fetch(request: Request, env: Env) {
     const url = new URL(request.url);
@@ -543,6 +582,12 @@ export default {
       const { results = [] } = await env.DB.prepare("SELECT map_name name,COUNT(*) maps FROM valorant_maps GROUP BY map_name HAVING maps>=5 ORDER BY name").all();
       return json(results);
     }
+    if (url.pathname === "/api/valorant/latest-series") return json(await latestValorantSeries(env.DB));
+    if (url.pathname === "/api/valorant/map-pool") {
+      const leftId = Number(url.searchParams.get("teamA")), rightId = Number(url.searchParams.get("teamB"));
+      if (!Number.isInteger(leftId) || !Number.isInteger(rightId) || leftId === rightId) return json({ error: "Select two distinct Valorant teams." }, 400);
+      return json(await valorantMapPool(env.DB, leftId, rightId));
+    }
     if (url.pathname === "/api/valorant/matchup") {
       const leftId = Number(url.searchParams.get("teamA")), rightId = Number(url.searchParams.get("teamB"));
       if (!Number.isInteger(leftId) || !Number.isInteger(rightId) || leftId === rightId) return json({ error: "Select two distinct Valorant teams." }, 400);
@@ -550,9 +595,11 @@ export default {
       const mapName = mapValue && mapValue.length <= 40 ? mapValue : null;
       const roundsValue = Number(url.searchParams.get("roundsLine"));
       const roundsLine = Number.isFinite(roundsValue) && roundsValue >= 10 && roundsValue <= 60 ? roundsValue : null;
+      const requestedBestOf = Number(url.searchParams.get("bestOf"));
+      const bestOf = [1, 3, 5].includes(requestedBestOf) ? requestedBestOf : 3;
       const [left, right] = await Promise.all([valorantProfile(env.DB, leftId, mapName), valorantProfile(env.DB, rightId, mapName)]);
       if (!left || !right || left.maps < 3 || right.maps < 3) return json({ error: "Both teams need at least three imported Valorant maps from 2025–2026." }, 404);
-      const prediction = predictValorant(left, right, roundsLine);
+      const prediction = predictValorant(left, right, roundsLine, bestOf);
       return json({ teamA: left.name, teamB: right.name, selectedMap: mapName, ...prediction, model: "Valorant time-aware map model", teamAContext: left, teamBContext: right });
     }
     if (url.pathname === "/api/latest-series") return json(await latestSeries(env.DB));

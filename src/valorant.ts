@@ -55,6 +55,18 @@ const normalCdf = (value: number) => {
   const erf = 1 - (((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-z * z));
   return 0.5 * (1 + sign * erf);
 };
+const binomial = (n: number, k: number) => {
+  let value = 1;
+  for (let index = 1; index <= k; index++) value = value * (n - k + index) / index;
+  return value;
+};
+const seriesWinChance = (mapChance: number, bestOf: number) => {
+  const maps = bestOf === 5 ? 5 : bestOf === 1 ? 1 : 3;
+  const needed = Math.floor(maps / 2) + 1;
+  let chance = 0;
+  for (let wins = needed; wins <= maps; wins++) chance += binomial(maps, wins) * mapChance ** wins * (1 - mapChance) ** (maps - wins);
+  return chance;
+};
 
 export function profileValorantTeam(id: number, name: string, maps: ValorantMap[], roster: string[], now = new Date()): ValorantProfile {
   const weighted = maps.map((map) => [map, weightFor(map.playedAt, now)] as const);
@@ -73,7 +85,7 @@ export function profileValorantTeam(id: number, name: string, maps: ValorantMap[
   };
 }
 
-export function predictValorant(left: ValorantProfile, right: ValorantProfile, roundsLine: number | null = null) {
+export function predictValorant(left: ValorantProfile, right: ValorantProfile, roundsLine: number | null = null, bestOf = 3) {
   const factors = [
     ["Recency-weighted map win rate", edge(left.winRate, right.winRate, 0.20), 0.34],
     ["Recent 35-day form", edge(left.recentWinRate, right.recentWinRate, 0.25), 0.20],
@@ -90,5 +102,6 @@ export function predictValorant(left: ValorantProfile, right: ValorantProfile, r
   const expectedRounds = left.totalRounds === null || right.totalRounds === null ? null : (left.totalRounds + right.totalRounds) / 2;
   const roundsDeviation = expectedRounds === null ? null : Math.max(2.4, Math.sqrt(((left.totalRoundsDeviation ?? 2.4) ** 2 + (right.totalRoundsDeviation ?? 2.4) ** 2) / 2));
   const probabilityOver = expectedRounds === null || roundsDeviation === null || roundsLine === null ? null : 1 - normalCdf((roundsLine - expectedRounds) / roundsDeviation);
-  return { probabilityA, probabilityB: 1 - probabilityA, factors, activeWeight, confidence: coverage, roundsForecast: expectedRounds === null || roundsDeviation === null ? null : { expected: expectedRounds, typicalLow: expectedRounds - .67449 * roundsDeviation, typicalHigh: expectedRounds + .67449 * roundsDeviation, line: roundsLine, probabilityOverLine: probabilityOver, probabilityUnderLine: probabilityOver === null ? null : 1 - probabilityOver } };
+  const seriesProbabilityA = seriesWinChance(probabilityA, bestOf);
+  return { probabilityA, probabilityB: 1 - probabilityA, seriesProbabilityA, seriesProbabilityB: 1 - seriesProbabilityA, bestOf, factors, activeWeight, confidence: coverage, roundsForecast: expectedRounds === null || roundsDeviation === null ? null : { expected: expectedRounds, typicalLow: expectedRounds - .67449 * roundsDeviation, typicalHigh: expectedRounds + .67449 * roundsDeviation, line: roundsLine, probabilityOverLine: probabilityOver, probabilityUnderLine: probabilityOver === null ? null : 1 - probabilityOver } };
 }
