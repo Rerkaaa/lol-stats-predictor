@@ -87,12 +87,8 @@ export function profileValorantTeam(id: number, name: string, maps: ValorantMap[
 
 export function predictValorant(left: ValorantProfile, right: ValorantProfile, roundsLine: number | null = null, bestOf = 3) {
   const factors = [
-    ["Recency-weighted map win rate", edge(left.winRate, right.winRate, 0.20), 0.34],
-    ["Recent 35-day form", edge(left.recentWinRate, right.recentWinRate, 0.25), 0.20],
-    ["Round differential", edge(left.roundDiff, right.roundDiff, 4), 0.18],
-    ["Average combat score", edge(left.acs, right.acs, 35), 0.13],
-    ["Team KDA", edge(left.kda, right.kda, 0.45), 0.08],
-    ["First-kill differential", edge(left.openingDiff, right.openingDiff, 2.5), 0.07],
+    ["Recency-weighted map win rate", edge(left.winRate, right.winRate, 0.20), 0.55],
+    ["Round differential", edge(left.roundDiff, right.roundDiff, 4), 0.45],
   ].map(([name, value, weight]) => ({ name: name as string, edge: value as number | null, weight: weight as number }));
   const available = factors.filter((factor) => factor.edge !== null);
   const activeWeight = available.reduce((sum, factor) => sum + factor.weight, 0);
