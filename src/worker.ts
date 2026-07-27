@@ -485,7 +485,7 @@ async function ingestValorantSeries(db: D1Database, series: ValorantSeriesPayloa
   return { importedSeries: imported, importedMaps: maps };
 }
 
-async function valorantProfile(db: D1Database, teamId: number) {
+async function valorantProfile(db: D1Database, teamId: number, mapName: string | null = null) {
   const team = await db.prepare("SELECT id,name FROM valorant_teams WHERE id=?").bind(teamId).first<{ id: number; name: string }>();
   if (!team) return null;
   const { results: rows = [] } = await db.prepare(
@@ -493,8 +493,8 @@ async function valorantProfile(db: D1Database, teamId: number) {
       CASE WHEN s.team_a_id=? THEN m.team_a_score ELSE m.team_b_score END roundsFor,CASE WHEN s.team_a_id=? THEN m.team_b_score ELSE m.team_a_score END roundsAgainst,
       AVG(p.acs) acs,SUM(p.kills) kills,SUM(p.deaths) deaths,SUM(p.assists) assists,SUM(p.first_kills) firstKills,SUM(p.first_deaths) firstDeaths
      FROM valorant_maps m JOIN valorant_series s ON s.id=m.series_id LEFT JOIN valorant_player_maps p ON p.map_id=m.id AND p.team_id=?
-     WHERE s.team_a_id=? OR s.team_b_id=? GROUP BY m.id ORDER BY s.played_at DESC`,
-  ).bind(teamId, teamId, teamId, teamId, teamId, teamId).all<ValorantMap>();
+     WHERE (s.team_a_id=? OR s.team_b_id=?) AND (? IS NULL OR m.map_name=?) GROUP BY m.id ORDER BY s.played_at DESC`,
+  ).bind(teamId, teamId, teamId, teamId, teamId, teamId, mapName, mapName).all<ValorantMap>();
   const { results: rosterRows = [] } = await db.prepare(
     `SELECT player_name name,COUNT(*) games FROM valorant_player_maps WHERE team_id=? GROUP BY player_name ORDER BY games DESC,MAX(id) DESC LIMIT 8`,
   ).bind(teamId).all<{ name: string }>();
@@ -539,13 +539,21 @@ export default {
       ).all();
       return json(results);
     }
+    if (url.pathname === "/api/valorant/maps") {
+      const { results = [] } = await env.DB.prepare("SELECT map_name name,COUNT(*) maps FROM valorant_maps GROUP BY map_name HAVING maps>=5 ORDER BY name").all();
+      return json(results);
+    }
     if (url.pathname === "/api/valorant/matchup") {
       const leftId = Number(url.searchParams.get("teamA")), rightId = Number(url.searchParams.get("teamB"));
       if (!Number.isInteger(leftId) || !Number.isInteger(rightId) || leftId === rightId) return json({ error: "Select two distinct Valorant teams." }, 400);
-      const [left, right] = await Promise.all([valorantProfile(env.DB, leftId), valorantProfile(env.DB, rightId)]);
+      const mapValue = url.searchParams.get("map")?.trim() ?? "";
+      const mapName = mapValue && mapValue.length <= 40 ? mapValue : null;
+      const roundsValue = Number(url.searchParams.get("roundsLine"));
+      const roundsLine = Number.isFinite(roundsValue) && roundsValue >= 10 && roundsValue <= 60 ? roundsValue : null;
+      const [left, right] = await Promise.all([valorantProfile(env.DB, leftId, mapName), valorantProfile(env.DB, rightId, mapName)]);
       if (!left || !right || left.maps < 3 || right.maps < 3) return json({ error: "Both teams need at least three imported Valorant maps from 2025–2026." }, 404);
-      const prediction = predictValorant(left, right);
-      return json({ teamA: left.name, teamB: right.name, ...prediction, model: "Valorant time-aware map model", teamAContext: left, teamBContext: right });
+      const prediction = predictValorant(left, right, roundsLine);
+      return json({ teamA: left.name, teamB: right.name, selectedMap: mapName, ...prediction, model: "Valorant time-aware map model", teamAContext: left, teamBContext: right });
     }
     if (url.pathname === "/api/latest-series") return json(await latestSeries(env.DB));
     if (url.pathname === "/api/match-history") {
