@@ -12,7 +12,7 @@ const esc=value=>String(value??'').replace(/[&<>'"]/g,char=>({'&':'&amp;','<':'&
 renderFavorites();
 const minutes=value=>`${Math.floor(value)}:${String(Math.round((value%1)*60)).padStart(2,'0')}`;
 const duration=value=>value?minutes(value/60):'Duration unavailable';
-const showView=view=>{for(const name of ['predictor','matches','valorant','lookup'])document.querySelector(`#${name}View`).hidden=name!==view;document.querySelector('#predictorHero').hidden=view!=='predictor';document.querySelectorAll('[data-view-button]').forEach(item=>item.classList.toggle('active',item.dataset.viewButton===view));history.replaceState(null,'',`#${view}`)};
+const showView=view=>{for(const name of ['predictor','matches','valorant','lookup']){const page=document.querySelector(`#${name}View`);if(page)page.hidden=name!==view}document.querySelector('#predictorHero').hidden=view!=='predictor';document.querySelectorAll('[data-view-button]').forEach(item=>item.classList.toggle('active',item.dataset.viewButton===view));history.replaceState(null,'',`#${view}`)};
 document.querySelectorAll('[data-view-button]').forEach(item=>item.addEventListener('click',()=>showView(item.dataset.viewButton)));
 document.querySelector('[data-view-link]').addEventListener('click',event=>{event.preventDefault();showView('predictor')});
 if(['#matches','#lookup'].includes(location.hash))showView(location.hash.slice(1));
