@@ -21,7 +21,7 @@ async function get(path) {
 }
 
 async function post(series) {
-  if (dryRun) { console.log(`Dry run: parsed ${series.length} series.`, series.map((item) => `${item.teamA} vs ${item.teamB} (${item.maps.length} maps)`).join("; ")); return { dryRun: true }; }
+  if (dryRun) { console.log(`Dry run: parsed ${series.length} series.`, series.map((item) => `${item.teamA} vs ${item.teamB} (${item.maps.length} maps; ${item.maps.map((map) => map.players?.length ?? 0).join("/")} player rows)`).join("; ")); return { dryRun: true }; }
   const response = await fetch(`${workerUrl}/api/admin/valorant/series`, {
     method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ series }),
   });
@@ -74,6 +74,31 @@ function mapBlocks(html) {
   return starts.map((start) => divBlock(html, start));
 }
 
+function columnValue(row, column) {
+  const match = row.match(new RegExp(`data-col="${column}"[\\s\\S]{0,500}?<span class="side mod-both[^>]*">\\s*([^<]+)`, "i"));
+  return match ? number(match[1]) : null;
+}
+
+function kdaValue(row, column) {
+  const match = row.match(new RegExp(`ovw-kda-stat" data-col="${column}">[\\s\\S]{0,350}?<span class="side mod-both[^>]*">\\s*([^<]+)`, "i"));
+  return match ? number(match[1]) : null;
+}
+
+function mapPlayers(block) {
+  const starts = [...block.matchAll(/<div class="ovw-row">/g)].map((match) => match.index).filter((index) => index !== undefined);
+  return starts.map((start, index) => {
+    const row = divBlock(block, start);
+    const name = text(row.match(/ovw-player-name text-of">([\s\S]*?)<\/div>/)?.[1] ?? "");
+    if (!name) return null;
+    return {
+      team: index < 5 ? "A" : "B", name,
+      agent: text(row.match(/class="ovw-agents"[\s\S]{0,500}?alt="([^"]+)"/)?.[1] ?? "") || undefined,
+      rating: columnValue(row, "rating2"), acs: columnValue(row, "acs"), adr: columnValue(row, "adr"), headshotPercent: columnValue(row, "hsp"),
+      kills: kdaValue(row, "kills"), deaths: kdaValue(row, "deaths"), assists: kdaValue(row, "assists"), firstKills: columnValue(row, "fb"), firstDeaths: columnValue(row, "fd"),
+    };
+  }).filter(Boolean);
+}
+
 function parseMatch(meta, html) {
   const maps = [];
   let mapNumber = 0;
@@ -83,7 +108,8 @@ function parseMatch(meta, html) {
     const mapName = text(block.match(/class="map">[\s\S]{0,1200}?<span[^>]*>\s*([^<]+?)\s*<span/)?.[1] ?? "");
     if (names.length < 2 || scores.length < 2 || !mapName || mapName === "All Maps") continue;
     mapNumber++;
-    maps.push({ number: mapNumber, name: mapName, durationSeconds: duration(text(block.match(/class="map-duration[^>]*">([\s\S]*?)<\/div>/)?.[1] ?? "")), teamAScore: scores[0], teamBScore: scores[1], winner: scores[0] === scores[1] ? undefined : scores[0] > scores[1] ? (names[0] === meta.teamA ? "A" : "B") : (names[1] === meta.teamA ? "A" : "B") });
+    const teamAIsFirst = names[0] === meta.teamA;
+    maps.push({ number: mapNumber, name: mapName, durationSeconds: duration(text(block.match(/class="map-duration[^>]*">([\s\S]*?)<\/div>/)?.[1] ?? "")), teamAScore: teamAIsFirst ? scores[0] : scores[1], teamBScore: teamAIsFirst ? scores[1] : scores[0], winner: scores[0] === scores[1] ? undefined : scores[0] > scores[1] ? (teamAIsFirst ? "A" : "B") : (teamAIsFirst ? "B" : "A"), players: mapPlayers(block).map((player) => ({ ...player, team: teamAIsFirst ? player.team : player.team === "A" ? "B" : "A" })) });
   }
   if (!maps.length) { if (dryRun) console.warn(`No played map rows parsed for ${meta.id}.`); return null; }
   const winner = meta.teamAScore === meta.teamBScore ? undefined : meta.teamAScore > meta.teamBScore ? "A" : "B";
