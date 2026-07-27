@@ -34,7 +34,11 @@ const average = (values: Array<[number | null, number]>) => {
   for (const [value, itemWeight] of values) if (valid(value) && itemWeight > 0) { total += value! * itemWeight; weight += itemWeight; }
   return weight ? total / weight : null;
 };
-const ageDays = (date: string, now: Date) => Math.max(0, (now.getTime() - Date.parse(`${date.replace(" ", "T")}Z`)) / DAY);
+const ageDays = (date: string, now: Date) => {
+  const normalized = date.endsWith("Z") ? date : `${date.replace(" ", "T")}Z`;
+  const timestamp = Date.parse(normalized);
+  return Number.isFinite(timestamp) ? Math.max(0, (now.getTime() - timestamp) / DAY) : 365;
+};
 const weightFor = (date: string, now: Date) => Math.max(0.08, 0.5 ** (ageDays(date, now) / 45));
 const edge = (left: number | null, right: number | null, scale: number) => left === null || right === null ? null : Math.max(-1, Math.min(1, (left - right) / scale));
 
