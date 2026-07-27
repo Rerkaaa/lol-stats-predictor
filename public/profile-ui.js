@@ -45,7 +45,10 @@
   };
 
   const normaliseRoles = () => {
-    document.querySelectorAll('.champion-cell span').forEach((role) => { role.textContent = role.textContent.replace(/^UTILITY\b/, 'SUPPORT'); });
+    document.querySelectorAll('.champion-cell span').forEach((role) => {
+      const next = (role.textContent ?? '').replace(/^UTILITY\b/, 'SUPPORT');
+      if (role.textContent !== next) role.textContent = next;
+    });
     document.querySelectorAll('.analytics .stat-card b').forEach((role) => { if (role.textContent.trim() === 'UTILITY') role.textContent = 'SUPPORT'; });
   };
 
