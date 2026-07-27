@@ -45,6 +45,10 @@ jobs:
           ORACLE_MAX_GAMES: ${{ inputs.max_games }}
           ORACLE_IMPORT_URL: ${{ secrets.ORACLE_IMPORT_URL }}
           ORACLE_IMPORT_TOKEN: ${{ secrets.ORACLE_IMPORT_TOKEN }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
         run: |
           if [[ "$EVENT_NAME" == "schedule" ]]; then
             if ! node scripts/is-tirane-midnight.mjs; then
@@ -59,5 +63,26 @@ jobs:
             if [[ -z "$YEAR" ]]; then YEAR="$(node scripts/current-oracle-year.mjs)"; fi
             SOURCE_URL="$(node scripts/resolve-oracle-drive-file.mjs "$YEAR")"
           fi
-          echo "Importing Oracle's Elixir season $YEAR (limit: ${ORACLE_MAX_GAMES:-all} changed games)"
-          node scripts/import-oracle.mjs "$YEAR" "$SOURCE_URL"
+          MIRROR_OBJECT="${YEAR}_LoL_esports_match_data_from_OraclesElixir.csv"
+          MIRROR_URL="https://pub-b6eea12acc9142678d1e15941794c319.r2.dev/${MIRROR_OBJECT}"
+          MIRROR_FILE="$RUNNER_TEMP/$MIRROR_OBJECT"
+
+          echo "Syncing Oracle's Elixir season $YEAR (limit: ${ORACLE_MAX_GAMES:-all} changed games)"
+          if node scripts/download-oracle-csv.mjs "$YEAR" "$SOURCE_URL" "$MIRROR_FILE"; then
+            if [[ -z "$R2_ACCESS_KEY_ID" || -z "$R2_SECRET_ACCESS_KEY" || -z "$R2_ENDPOINT" || -z "$R2_BUCKET_NAME" ]]; then
+              echo "R2 credentials are not configured yet; importing this verified Oracle download directly."
+              node scripts/import-oracle.mjs "$YEAR" "$SOURCE_URL"
+            else
+              if ! command -v aws >/dev/null 2>&1; then
+                python3 -m pip install --user awscli
+                export PATH="$HOME/.local/bin:$PATH"
+              fi
+              AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY" AWS_DEFAULT_REGION="auto" \
+                aws s3 cp "$MIRROR_FILE" "s3://$R2_BUCKET_NAME/$MIRROR_OBJECT" --endpoint-url "$R2_ENDPOINT"
+              echo "R2 mirror updated: $MIRROR_URL"
+              node scripts/import-oracle.mjs "$YEAR" "$MIRROR_URL"
+            fi
+          else
+            echo "Oracle's download is unavailable; importing from the existing R2 mirror."
+            node scripts/import-oracle.mjs "$YEAR" "$MIRROR_URL"
+          fi
