@@ -98,7 +98,9 @@ export function predictValorant(left: ValorantProfile, right: ValorantProfile, r
   const activeWeight = available.reduce((sum, factor) => sum + factor.weight, 0);
   const raw = activeWeight ? available.reduce((sum, factor) => sum + (factor.edge ?? 0) * factor.weight / activeWeight, 0) : 0;
   const coverage = Math.min(1, Math.min(left.effectiveMaps, right.effectiveMaps) / 25);
-  const probabilityA = 1 / (1 + Math.exp(-(raw * 2.2 * Math.max(0.45, coverage))));
+  // Rolling 2025–2026 replay calibration: a conservative scale reduced Brier error
+  // versus the previously overconfident raw model.
+  const probabilityA = 1 / (1 + Math.exp(-(raw * 0.9 * Math.max(0.45, coverage))));
   const expectedRounds = left.totalRounds === null || right.totalRounds === null ? null : (left.totalRounds + right.totalRounds) / 2;
   const roundsDeviation = expectedRounds === null ? null : Math.max(2.4, Math.sqrt(((left.totalRoundsDeviation ?? 2.4) ** 2 + (right.totalRoundsDeviation ?? 2.4) ** 2) / 2));
   const probabilityOver = expectedRounds === null || roundsDeviation === null || roundsLine === null ? null : 1 - normalCdf((roundsLine - expectedRounds) / roundsDeviation);
