@@ -1,11 +1,13 @@
 import { ingestOracleGames } from "./oracle-ingest";
 import type { OracleGamePayload } from "./oracle";
 import { predictTimeAware, profileTeam, type PlayerGame, type RosterPlayer, type TeamGame } from "./prediction";
+import { predictValorant, profileValorantTeam, type ValorantMap } from "./valorant";
 
 export interface Env {
   DB: D1Database;
   ASSETS: Fetcher;
   IMPORT_TOKEN?: string;
+  VALORANT_IMPORT_TOKEN?: string;
   RIOT_API_KEY?: string;
 }
 
@@ -32,6 +34,9 @@ type RankSnapshot = { seasonYear: number; tier: string | null; division: string 
 type StartImportBody = { year?: number; sourceUrl?: string; sourceHash?: string };
 type ChangedGamesBody = StartImportBody & { games?: Array<{ gameId?: string; sourceHash?: string }> };
 type GamesBody = StartImportBody & { games?: OracleGamePayload[] };
+type ValorantPlayerPayload = { name: string; agent?: string; rating?: number; acs?: number; adr?: number; kills?: number; deaths?: number; assists?: number; headshotPercent?: number; firstKills?: number; firstDeaths?: number };
+type ValorantMapPayload = { number: number; name: string; durationSeconds?: number; teamAScore?: number; teamBScore?: number; winner?: "A" | "B"; players?: Array<ValorantPlayerPayload & { team: "A" | "B" }> };
+type ValorantSeriesPayload = { id: string; url?: string; event?: string; tier?: string; playedAt: string; bestOf?: number; patch?: string; teamA: string; teamB: string; teamAScore?: number; teamBScore?: number; winner?: "A" | "B"; maps: ValorantMapPayload[] };
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
@@ -429,10 +434,90 @@ async function handleOracleAdmin(request: Request, env: Env, pathname: string) {
   }
 }
 
+const valorantAuthorized = (request: Request, env: Env) => {
+  const token = env.VALORANT_IMPORT_TOKEN ?? env.IMPORT_TOKEN;
+  return !!token && request.headers.get("authorization") === `Bearer ${token}`;
+};
+
+async function valorantTeamId(db: D1Database, name: string) {
+  const clean = name.trim();
+  await db.prepare("INSERT INTO valorant_teams(name) VALUES(?) ON CONFLICT(name) DO NOTHING").bind(clean).run();
+  const row = await db.prepare("SELECT id FROM valorant_teams WHERE name=?").bind(clean).first<{ id: number }>();
+  if (!row) throw new Error(`Could not save Valorant team ${clean}`);
+  return row.id;
+}
+
+async function ingestValorantSeries(db: D1Database, series: ValorantSeriesPayload[]) {
+  let imported = 0, maps = 0;
+  for (const entry of series) {
+    const year = new Date(entry.playedAt).getUTCFullYear();
+    if (!entry.id || !entry.teamA?.trim() || !entry.teamB?.trim() || !Array.isArray(entry.maps) || !entry.maps.length || ![2025, 2026].includes(year)) continue;
+    const [teamAId, teamBId] = await Promise.all([valorantTeamId(db, entry.teamA), valorantTeamId(db, entry.teamB)]);
+    const winnerId = entry.winner === "A" ? teamAId : entry.winner === "B" ? teamBId : null;
+    await db.prepare(
+      `INSERT INTO valorant_series(source_match_id,source_url,event_name,event_tier,played_at,best_of,patch,team_a_id,team_b_id,team_a_score,team_b_score,winner_team_id,updated_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+       ON CONFLICT(source_match_id) DO UPDATE SET source_url=excluded.source_url,event_name=excluded.event_name,event_tier=excluded.event_tier,played_at=excluded.played_at,best_of=excluded.best_of,patch=excluded.patch,team_a_id=excluded.team_a_id,team_b_id=excluded.team_b_id,team_a_score=excluded.team_a_score,team_b_score=excluded.team_b_score,winner_team_id=excluded.winner_team_id,updated_at=CURRENT_TIMESTAMP`,
+    ).bind(entry.id, entry.url ?? null, entry.event ?? null, entry.tier ?? null, entry.playedAt, entry.bestOf ?? null, entry.patch ?? null, teamAId, teamBId, entry.teamAScore ?? null, entry.teamBScore ?? null, winnerId).run();
+    const stored = await db.prepare("SELECT id FROM valorant_series WHERE source_match_id=?").bind(entry.id).first<{ id: number }>();
+    if (!stored) throw new Error(`Could not save Valorant series ${entry.id}`);
+    imported++;
+    for (const map of entry.maps) {
+      if (!Number.isInteger(map.number) || !map.name?.trim()) continue;
+      const mapWinnerId = map.winner === "A" ? teamAId : map.winner === "B" ? teamBId : null;
+      await db.prepare(
+        `INSERT INTO valorant_maps(series_id,map_number,map_name,duration_seconds,team_a_score,team_b_score,winner_team_id)
+         VALUES(?,?,?,?,?,?,?) ON CONFLICT(series_id,map_number) DO UPDATE SET map_name=excluded.map_name,duration_seconds=excluded.duration_seconds,team_a_score=excluded.team_a_score,team_b_score=excluded.team_b_score,winner_team_id=excluded.winner_team_id`,
+      ).bind(stored.id, map.number, map.name, map.durationSeconds ?? null, map.teamAScore ?? null, map.teamBScore ?? null, mapWinnerId).run();
+      const savedMap = await db.prepare("SELECT id FROM valorant_maps WHERE series_id=? AND map_number=?").bind(stored.id, map.number).first<{ id: number }>();
+      if (!savedMap) continue;
+      maps++;
+      for (const player of map.players ?? []) {
+        const teamId = player.team === "A" ? teamAId : teamBId;
+        if (!player.name?.trim()) continue;
+        await db.prepare(
+          `INSERT INTO valorant_player_maps(map_id,team_id,player_name,agent,rating,acs,adr,kills,deaths,assists,headshot_percent,first_kills,first_deaths)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(map_id,team_id,player_name) DO UPDATE SET agent=excluded.agent,rating=excluded.rating,acs=excluded.acs,adr=excluded.adr,kills=excluded.kills,deaths=excluded.deaths,assists=excluded.assists,headshot_percent=excluded.headshot_percent,first_kills=excluded.first_kills,first_deaths=excluded.first_deaths`,
+        ).bind(savedMap.id, teamId, player.name, player.agent ?? null, player.rating ?? null, player.acs ?? null, player.adr ?? null, player.kills ?? null, player.deaths ?? null, player.assists ?? null, player.headshotPercent ?? null, player.firstKills ?? null, player.firstDeaths ?? null).run();
+      }
+    }
+  }
+  return { importedSeries: imported, importedMaps: maps };
+}
+
+async function valorantProfile(db: D1Database, teamId: number) {
+  const team = await db.prepare("SELECT id,name FROM valorant_teams WHERE id=?").bind(teamId).first<{ id: number; name: string }>();
+  if (!team) return null;
+  const { results: rows = [] } = await db.prepare(
+    `SELECT s.played_at playedAt,m.map_name mapName,CASE WHEN m.winner_team_id=? THEN 1 WHEN m.winner_team_id IS NULL THEN NULL ELSE 0 END won,
+      CASE WHEN s.team_a_id=? THEN m.team_a_score ELSE m.team_b_score END roundsFor,CASE WHEN s.team_a_id=? THEN m.team_b_score ELSE m.team_a_score END roundsAgainst,
+      AVG(p.acs) acs,SUM(p.kills) kills,SUM(p.deaths) deaths,SUM(p.assists) assists,SUM(p.first_kills) firstKills,SUM(p.first_deaths) firstDeaths
+     FROM valorant_maps m JOIN valorant_series s ON s.id=m.series_id LEFT JOIN valorant_player_maps p ON p.map_id=m.id AND p.team_id=?
+     WHERE s.team_a_id=? OR s.team_b_id=? GROUP BY m.id ORDER BY s.played_at DESC`,
+  ).bind(teamId, teamId, teamId, teamId, teamId, teamId).all<ValorantMap>();
+  const { results: rosterRows = [] } = await db.prepare(
+    `SELECT player_name name,COUNT(*) games FROM valorant_player_maps WHERE team_id=? GROUP BY player_name ORDER BY games DESC,MAX(id) DESC LIMIT 8`,
+  ).bind(teamId).all<{ name: string }>();
+  return profileValorantTeam(team.id, team.name, rows, rosterRows.map((row) => row.name));
+}
+
+async function handleValorantAdmin(request: Request, env: Env) {
+  if (!valorantAuthorized(request, env)) return json({ error: "Unauthorized" }, 401);
+  if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
+  try {
+    const body = await request.json<{ series?: ValorantSeriesPayload[] }>();
+    if (!Array.isArray(body.series) || body.series.length < 1 || body.series.length > 25) return json({ error: "Expected 1-25 Valorant series." }, 400);
+    return json(await ingestValorantSeries(env.DB, body.series));
+  } catch (error) {
+    return json({ error: "Valorant import failed", detail: errorMessage(error) }, 500);
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env) {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/api/admin/oracle/")) return handleOracleAdmin(request, env, url.pathname);
+    if (url.pathname === "/api/admin/valorant/series") return handleValorantAdmin(request, env);
     if (url.pathname === "/api/health") return json({ ok: true, source: "Oracle's Elixir", coverage: "2022+" });
     if (url.pathname === "/api/summoner") return summonerLookup(request, env, url);
     if (url.pathname === "/api/summoner/match") return fullMatchDetails(env, url);
@@ -447,6 +532,20 @@ export default {
         .prepare("SELECT t.id,t.name,COUNT(s.match_id) games FROM teams t JOIN team_game_stats s ON s.team_id=t.id JOIN matches m ON m.id=s.match_id WHERE m.source_game_id LIKE 'oracle:%' AND m.played_at>='2022-01-01' GROUP BY t.id,t.name HAVING games>0 ORDER BY t.name")
         .all();
       return json(results);
+    }
+    if (url.pathname === "/api/valorant/teams") {
+      const { results = [] } = await env.DB.prepare(
+        `SELECT t.id,t.name,COUNT(m.id) maps FROM valorant_teams t JOIN valorant_series s ON s.team_a_id=t.id OR s.team_b_id=t.id JOIN valorant_maps m ON m.series_id=s.id WHERE s.played_at>='2025-01-01' AND s.played_at<'2027-01-01' GROUP BY t.id,t.name HAVING maps>=3 ORDER BY t.name`,
+      ).all();
+      return json(results);
+    }
+    if (url.pathname === "/api/valorant/matchup") {
+      const leftId = Number(url.searchParams.get("teamA")), rightId = Number(url.searchParams.get("teamB"));
+      if (!Number.isInteger(leftId) || !Number.isInteger(rightId) || leftId === rightId) return json({ error: "Select two distinct Valorant teams." }, 400);
+      const [left, right] = await Promise.all([valorantProfile(env.DB, leftId), valorantProfile(env.DB, rightId)]);
+      if (!left || !right || left.maps < 3 || right.maps < 3) return json({ error: "Both teams need at least three imported Valorant maps from 2025–2026." }, 404);
+      const prediction = predictValorant(left, right);
+      return json({ teamA: left.name, teamB: right.name, ...prediction, model: "Valorant time-aware map model", teamAContext: left, teamBContext: right });
     }
     if (url.pathname === "/api/latest-series") return json(await latestSeries(env.DB));
     if (url.pathname === "/api/match-history") {
