@@ -1,8 +1,8 @@
 const workerUrl = process.env.VALORANT_IMPORT_URL?.replace(/\/$/, "");
 const token = process.env.VALORANT_IMPORT_TOKEN;
 const dryRun = process.env.VALORANT_DRY_RUN === "1";
-const eventLimit = Math.max(1, Math.min(60, Number(process.env.VLR_EVENT_LIMIT ?? 60)));
-const matchLimit = Math.max(1, Math.min(800, Number(process.env.VLR_MATCH_LIMIT ?? 800)));
+const eventLimit = Math.max(1, Math.min(60, Number(process.env.VLR_EVENT_LIMIT || 60)));
+const matchLimit = Math.max(1, Math.min(800, Number(process.env.VLR_MATCH_LIMIT || 800)));
 const years = process.argv.slice(2).map(Number).filter((year) => year === 2025 || year === 2026);
 const targetYears = years.length ? years : [2025, 2026];
 
