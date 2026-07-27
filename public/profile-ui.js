@@ -52,5 +52,5 @@
     document.querySelectorAll('.analytics .stat-card b').forEach((role) => { if (role.textContent.trim() === 'UTILITY') role.textContent = 'SUPPORT'; });
   };
 
-  new MutationObserver(() => { improveProfile(); normaliseRoles(); }).observe(document.querySelector('#lookupResult'), { childList: true, subtree: true });
+  new MutationObserver(() => { improveProfile(); normaliseRoles(); }).observe(document.querySelector('#lookupResult'), { childList: true });
 })();
