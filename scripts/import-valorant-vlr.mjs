@@ -132,8 +132,11 @@ function parseMatch(meta, html) {
   return { id: `vlr:${meta.id}`, url: `https://www.vlr.gg${meta.path}`, event: meta.event.slug.replace(/-/g, " "), tier: "VCT", playedAt: meta.date, bestOf: Math.max(1, maps.length), teamA: meta.teamA, teamB: meta.teamB, teamAScore: meta.teamAScore, teamBScore: meta.teamBScore, winner, maps };
 }
 
-const overview = await get("/vct/");
-const events = eventLinks(overview);
+// VLR's /vct/ page only lists the active circuit. Historical seasons have their
+// own pages, so discover events from each requested year rather than silently
+// returning an empty result for a completed season such as 2025.
+const overviewPages = await Promise.all(targetYears.map((year) => get(`/vct-${year}/`)));
+const events = [...new Map(overviewPages.flatMap(eventLinks).map((event) => [event.id, event])).values()].slice(0, eventLimit);
 console.log(`Found ${events.length} VCT events for ${targetYears.join(", ")}.`);
 const matchMeta = [];
 for (const event of events) {
