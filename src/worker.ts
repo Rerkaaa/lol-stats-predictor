@@ -543,6 +543,17 @@ async function valorantMapPool(db: D1Database, teamA: number, teamB: number) {
   return results;
 }
 
+async function valorantHeadToHead(db: D1Database, teamA: number, teamB: number) {
+  return db.prepare(
+    `SELECT COUNT(*) maps,
+      SUM(CASE WHEN m.winner_team_id=? THEN 1 ELSE 0 END) teamAWins,
+      SUM(CASE WHEN m.winner_team_id=? THEN 1 ELSE 0 END) teamBWins,
+      MAX(s.played_at) latestAt
+     FROM valorant_maps m JOIN valorant_series s ON s.id=m.series_id
+     WHERE (s.team_a_id=? AND s.team_b_id=?) OR (s.team_a_id=? AND s.team_b_id=?)`,
+  ).bind(teamA, teamB, teamA, teamB, teamB, teamA).first<{ maps: number; teamAWins: number; teamBWins: number; latestAt: string | null }>();
+}
+
 async function latestValorantSeries(db: D1Database) {
   const { results: series = [] } = await db.prepare(
     `SELECT s.id,s.played_at playedAt,s.event_name event,s.best_of bestOf,s.team_a_score teamAScore,s.team_b_score teamBScore,a.name teamA,b.name teamB,w.name winner
@@ -611,10 +622,10 @@ export default {
       const roundsLine = Number.isFinite(roundsValue) && roundsValue >= 10 && roundsValue <= 60 ? roundsValue : null;
       const requestedBestOf = Number(url.searchParams.get("bestOf"));
       const bestOf = [1, 3, 5].includes(requestedBestOf) ? requestedBestOf : 3;
-      const [left, right] = await Promise.all([valorantProfile(env.DB, leftId, mapName), valorantProfile(env.DB, rightId, mapName)]);
+      const [left, right, headToHead] = await Promise.all([valorantProfile(env.DB, leftId, mapName), valorantProfile(env.DB, rightId, mapName), valorantHeadToHead(env.DB, leftId, rightId)]);
       if (!left || !right || left.maps < 3 || right.maps < 3) return json({ error: "Both teams need at least three imported Valorant maps from 2025–2026." }, 404);
       const prediction = predictValorant(left, right, roundsLine, bestOf);
-      return json({ teamA: left.name, teamB: right.name, selectedMap: mapName, ...prediction, model: "Valorant time-aware map model", teamAContext: left, teamBContext: right });
+      return json({ teamA: left.name, teamB: right.name, selectedMap: mapName, ...prediction, model: "Valorant time-aware map model", teamAContext: left, teamBContext: right, headToHead });
     }
     if (url.pathname === "/api/latest-series") return json(await latestSeries(env.DB));
     if (url.pathname === "/api/match-history") {
