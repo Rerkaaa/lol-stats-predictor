@@ -491,7 +491,7 @@ async function valorantProfile(db: D1Database, teamId: number, mapName: string |
   const { results: rows = [] } = await db.prepare(
     `SELECT s.played_at playedAt,m.map_name mapName,CASE WHEN m.winner_team_id=? THEN 1 WHEN m.winner_team_id IS NULL THEN NULL ELSE 0 END won,
       CASE WHEN s.team_a_id=? THEN m.team_a_score ELSE m.team_b_score END roundsFor,CASE WHEN s.team_a_id=? THEN m.team_b_score ELSE m.team_a_score END roundsAgainst,
-      AVG(p.acs) acs,SUM(p.kills) kills,SUM(p.deaths) deaths,SUM(p.assists) assists,SUM(p.first_kills) firstKills,SUM(p.first_deaths) firstDeaths
+      AVG(p.acs) acs,AVG(p.adr) adr,SUM(p.kills) kills,SUM(p.deaths) deaths,SUM(p.assists) assists,SUM(p.first_kills) firstKills,SUM(p.first_deaths) firstDeaths
      FROM valorant_maps m JOIN valorant_series s ON s.id=m.series_id LEFT JOIN valorant_player_maps p ON p.map_id=m.id AND p.team_id=?
      WHERE (s.team_a_id=? OR s.team_b_id=?) AND (? IS NULL OR m.map_name=?) GROUP BY m.id ORDER BY s.played_at DESC`,
   ).bind(teamId, teamId, teamId, teamId, teamId, teamId, mapName, mapName).all<ValorantMap>();
@@ -573,6 +573,40 @@ async function valorantRollingMeta(db: D1Database, teamA: number, teamB: number)
   return { windowDays: 60, agents, teamA: { maps: leftMaps, picks: byTeam.get(teamA)?.picks ?? 0 }, teamB: { maps: rightMaps, picks: byTeam.get(teamB)?.picks ?? 0 }, coverage: Math.min(1, Math.min(leftMaps, rightMaps) / 10) };
 }
 
+const parseValorantDraft = (value: string | null) => [...new Set((value ?? "").split(",").map((agent) => agent.trim()).filter((agent) => agent.length >= 2 && agent.length <= 24))].slice(0, 5);
+
+async function valorantDraftFit(db: D1Database, teamId: number, agents: string[]) {
+  if (!agents.length) return null;
+  const { results = [] } = await db.prepare(
+    `WITH latest AS (SELECT MAX(played_at) played_at FROM valorant_series)
+     SELECT p.agent,COUNT(DISTINCT p.map_id) maps,SUM(CASE WHEN m.winner_team_id=p.team_id THEN 1 ELSE 0 END) wins,
+       AVG(p.acs) acs,AVG(p.adr) adr
+     FROM valorant_player_maps p JOIN valorant_maps m ON m.id=p.map_id JOIN valorant_series s ON s.id=m.series_id JOIN latest l
+     WHERE p.team_id=? AND lower(p.agent) IN (${agents.map(() => "?").join(",")}) AND s.played_at>=datetime(l.played_at,'-180 days')
+     GROUP BY p.agent ORDER BY p.agent`,
+  ).bind(teamId, ...agents.map((agent) => agent.toLowerCase())).all<{ agent: string; maps: number; wins: number; acs: number | null; adr: number | null }>();
+  const byAgent = new Map(results.map((row) => [row.agent.toLowerCase(), row]));
+  return agents.map((agent) => {
+    const row = byAgent.get(agent.toLowerCase());
+    return row ? { ...row, winRate: row.maps ? row.wins / row.maps : null } : { agent, maps: 0, wins: 0, acs: null, adr: null, winRate: null };
+  });
+}
+
+async function valorantPlayerForm(db: D1Database, teamId: number) {
+  const { results = [] } = await db.prepare(
+    `WITH latest AS (SELECT MAX(played_at) played_at FROM valorant_series), latest_lineup AS (
+       SELECT p.player_name FROM valorant_player_maps p JOIN valorant_maps m ON m.id=p.map_id JOIN valorant_series s ON s.id=m.series_id
+       WHERE p.team_id=? ORDER BY s.played_at DESC,p.map_id DESC LIMIT 5
+     )
+     SELECT p.player_name name,COUNT(DISTINCT p.map_id) maps,AVG(p.acs) acs,AVG(p.adr) adr,
+       SUM(p.kills) kills,SUM(p.deaths) deaths,SUM(p.assists) assists
+     FROM valorant_player_maps p JOIN valorant_maps m ON m.id=p.map_id JOIN valorant_series s ON s.id=m.series_id JOIN latest l
+     WHERE p.team_id=? AND p.player_name IN (SELECT player_name FROM latest_lineup) AND s.played_at>=datetime(l.played_at,'-45 days')
+     GROUP BY p.player_name ORDER BY maps DESC,adr DESC`,
+  ).bind(teamId, teamId).all<{ name: string; maps: number; acs: number | null; adr: number | null; kills: number; deaths: number; assists: number }>();
+  return results;
+}
+
 async function latestValorantSeries(db: D1Database) {
   const { results: series = [] } = await db.prepare(
     `SELECT s.id,s.played_at playedAt,s.event_name event,s.best_of bestOf,s.team_a_score teamAScore,s.team_b_score teamBScore,a.name teamA,b.name teamB,w.name winner
@@ -641,10 +675,14 @@ export default {
       const roundsLine = Number.isFinite(roundsValue) && roundsValue >= 10 && roundsValue <= 60 ? roundsValue : null;
       const requestedBestOf = Number(url.searchParams.get("bestOf"));
       const bestOf = [1, 3, 5].includes(requestedBestOf) ? requestedBestOf : 3;
-      const [left, right, headToHead, meta] = await Promise.all([valorantProfile(env.DB, leftId, mapName), valorantProfile(env.DB, rightId, mapName), valorantHeadToHead(env.DB, leftId, rightId), valorantRollingMeta(env.DB, leftId, rightId)]);
+      const draftA = parseValorantDraft(url.searchParams.get("draftA")), draftB = parseValorantDraft(url.searchParams.get("draftB"));
+      const [left, right, headToHead, meta, draftAStats, draftBStats, playerFormA, playerFormB] = await Promise.all([
+        valorantProfile(env.DB, leftId, mapName), valorantProfile(env.DB, rightId, mapName), valorantHeadToHead(env.DB, leftId, rightId), valorantRollingMeta(env.DB, leftId, rightId),
+        valorantDraftFit(env.DB, leftId, draftA), valorantDraftFit(env.DB, rightId, draftB), valorantPlayerForm(env.DB, leftId), valorantPlayerForm(env.DB, rightId),
+      ]);
       if (!left || !right || left.maps < 3 || right.maps < 3) return json({ error: "Both teams need at least three imported Valorant maps from 2025–2026." }, 404);
       const prediction = predictValorant(left, right, roundsLine, bestOf, meta.coverage);
-      return json({ teamA: left.name, teamB: right.name, selectedMap: mapName, ...prediction, model: "Valorant time-aware map model", teamAContext: left, teamBContext: right, headToHead, meta });
+      return json({ teamA: left.name, teamB: right.name, selectedMap: mapName, ...prediction, model: "Valorant time-aware map model", teamAContext: left, teamBContext: right, headToHead, meta, draft: { teamA: draftAStats, teamB: draftBStats }, playerForm: { teamA: playerFormA, teamB: playerFormB } });
     }
     if (url.pathname === "/api/latest-series") return json(await latestSeries(env.DB));
     if (url.pathname === "/api/match-history") {

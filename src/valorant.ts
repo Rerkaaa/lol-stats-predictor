@@ -5,6 +5,7 @@ export type ValorantMap = {
   roundsFor: number | null;
   roundsAgainst: number | null;
   acs: number | null;
+  adr: number | null;
   kills: number | null;
   deaths: number | null;
   assists: number | null;
@@ -21,6 +22,7 @@ export type ValorantProfile = {
   recentWinRate: number | null;
   roundDiff: number | null;
   acs: number | null;
+  adr: number | null;
   kda: number | null;
   openingDiff: number | null;
   totalRounds: number | null;
@@ -79,6 +81,7 @@ export function profileValorantTeam(id: number, name: string, maps: ValorantMap[
     winRate: metric((map) => map.won), recentWinRate: recent.length ? recent.reduce((sum, map) => sum + map.won, 0) / recent.length : null,
     roundDiff: metric((map) => map.roundsFor === null || map.roundsAgainst === null ? null : map.roundsFor - map.roundsAgainst),
     acs: metric((map) => map.acs),
+    adr: metric((map) => map.adr),
     kda: metric((map) => map.kills === null || map.deaths === null || map.assists === null ? null : (map.kills + map.assists) / Math.max(1, map.deaths)),
     openingDiff: metric((map) => map.firstKills === null || map.firstDeaths === null ? null : map.firstKills - map.firstDeaths),
     totalRounds: rounds.mean, totalRoundsDeviation: rounds.deviation,
@@ -88,9 +91,10 @@ export function profileValorantTeam(id: number, name: string, maps: ValorantMap[
 
 export function predictValorant(left: ValorantProfile, right: ValorantProfile, roundsLine: number | null = null, bestOf = 3, metaCoverage: number | null = null) {
   const factors = [
-    ["Recency-weighted map win rate", edge(left.winRate, right.winRate, 0.20), 0.48],
-    ["Round differential", edge(left.roundDiff, right.roundDiff, 4), 0.37],
-    ["Recent 35-day form", edge(left.recentWinRate, right.recentWinRate, 0.25), 0.15],
+    ["Recency-weighted map win rate", edge(left.winRate, right.winRate, 0.20), 0.44],
+    ["Round differential", edge(left.roundDiff, right.roundDiff, 4), 0.34],
+    ["Recent 35-day form", edge(left.recentWinRate, right.recentWinRate, 0.25), 0.14],
+    ["Recent roster ADR", edge(left.adr, right.adr, 25), 0.08],
   ].map(([name, value, weight]) => ({ name: name as string, edge: value as number | null, weight: weight as number }));
   const available = factors.filter((factor) => factor.edge !== null);
   const activeWeight = available.reduce((sum, factor) => sum + factor.weight, 0);
