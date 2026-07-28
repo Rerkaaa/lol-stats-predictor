@@ -3,7 +3,7 @@ const token = process.env.VALORANT_IMPORT_TOKEN;
 const dryRun = process.env.VALORANT_DRY_RUN === "1";
 const eventLimit = Math.max(1, Math.min(60, Number(process.env.VLR_EVENT_LIMIT || 60)));
 const matchLimit = Math.max(1, Math.min(800, Number(process.env.VLR_MATCH_LIMIT || 800)));
-const importBatchSize = Math.max(1, Math.min(10, Number(process.env.VLR_IMPORT_BATCH_SIZE || 5)));
+const importBatchSize = 1;
 const years = process.argv.slice(2).map(Number).filter((year) => year === 2025 || year === 2026);
 const targetYears = years.length ? years : [2025, 2026];
 
@@ -28,7 +28,11 @@ async function post(series) {
       const response = await fetch(`${workerUrl}/api/admin/valorant/series`, {
         method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ series }),
       });
-      if (response.ok) return response.json();
+      if (response.ok) {
+        const result = await response.json();
+        await sleep(300);
+        return result;
+      }
       const body = await response.text();
       if (response.status < 500 || attempt === 4) throw new Error(`Worker import returned HTTP ${response.status}: ${body}`);
       console.warn(`Temporary Worker/D1 error on import batch (attempt ${attempt}/4): ${body}`);

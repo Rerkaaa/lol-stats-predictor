@@ -506,7 +506,7 @@ async function handleValorantAdmin(request: Request, env: Env) {
   if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
   try {
     const body = await request.json<{ series?: ValorantSeriesPayload[] }>();
-    if (!Array.isArray(body.series) || body.series.length < 1 || body.series.length > 10) return json({ error: "Expected 1-10 Valorant series." }, 400);
+    if (!Array.isArray(body.series) || body.series.length !== 1) return json({ error: "Expected exactly one Valorant series." }, 400);
     return json(await ingestValorantSeries(env.DB, body.series));
   } catch (error) {
     return json({ error: "Valorant import failed", detail: errorMessage(error) }, 500);
