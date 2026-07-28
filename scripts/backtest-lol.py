@@ -129,6 +129,35 @@ for row in game_rows:
     entry["player_rows"] = players[(row["id"], row["team_id"])]
     matches[row["id"]].append(entry)
 
+# Opponent-adjusted Elo is built from the entire imported history, separately
+# from the rolling feature window used by the main model.
+elo_matches = defaultdict(list)
+for row in db.execute("""
+  SELECT m.id,m.played_at,s.team_id,s.won
+  FROM matches m JOIN team_game_stats s ON s.match_id=m.id
+  WHERE m.source_game_id LIKE 'oracle:%' AND m.played_at>='2022-01-01'
+  ORDER BY m.played_at,m.id
+"""):
+    date = parse_date(row["played_at"])
+    if date:
+        elo_matches[row["id"]].append((row["team_id"], row["won"], date))
+
+ratings, last_seen, elo_before = defaultdict(lambda: 1500.0), {}, {}
+for match_id, teams in sorted(elo_matches.items(), key=lambda item: item[1][0][2]):
+    if len(teams) != 2:
+        continue
+    (team_a, won_a, date), (team_b, won_b, _) = teams
+    for team in (team_a, team_b):
+        if team in last_seen:
+            days = max(0, (date - last_seen[team]).total_seconds() / 86400)
+            ratings[team] = 1500 + (ratings[team] - 1500) * (0.5 ** (days / 180))
+        last_seen[team] = date
+    rating_a, rating_b = ratings[team_a], ratings[team_b]
+    expected_a = 1 / (1 + 10 ** ((rating_b - rating_a) / 400))
+    elo_before[match_id] = {team_a: (rating_a, rating_b), team_b: (rating_b, rating_a)}
+    ratings[team_a] += 24 * (won_a - expected_a)
+    ratings[team_b] += 24 * (won_b - (1 - expected_a))
+
 history = defaultdict(list)
 predictions = []
 for _, teams in sorted(matches.items(), key=lambda item: item[1][0]["date"]):
@@ -140,7 +169,9 @@ for _, teams in sorted(matches.items(), key=lambda item: item[1][0]["date"]):
     if len(history[left_game["team_id"]]) >= 10 and len(history[right_game["team_id"]]) >= 10:
         chance = predict(left, right)
         if chance is not None:
-            predictions.append((chance, left_game["won"], left_game["date"].date().isoformat()))
+            rating_a, rating_b = elo_before.get(left_game["id"], {}).get(left_game["team_id"], (1500, 1500))
+            elo_chance = 1 / (1 + 10 ** ((rating_b - rating_a) / 400))
+            predictions.append((chance, elo_chance, left_game["won"], left_game["date"].date().isoformat()))
     history[left_game["team_id"]].append(left_game)
     history[right_game["team_id"]].append(right_game)
     if len(history[left_game["team_id"]]) > 120:
@@ -149,10 +180,15 @@ for _, teams in sorted(matches.items(), key=lambda item: item[1][0]["date"]):
         history[right_game["team_id"]].pop(0)
 
 sample = predictions[-200:]
-accuracy = sum((chance >= .5) == bool(won) for chance, won, _ in sample) / len(sample)
-brier = sum((chance - won) ** 2 for chance, won, _ in sample) / len(sample)
-mae = sum(abs(chance - won) for chance, won, _ in sample) / len(sample)
-result = {"tested_games": len(sample), "first_game": sample[0][2], "last_game": sample[-1][2], "winner_accuracy_percent": round(accuracy * 100, 1), "brier_score": round(brier, 4), "mean_absolute_error": round(mae, 4)}
+accuracy = sum((chance >= .5) == bool(won) for chance, _, won, _ in sample) / len(sample)
+brier = sum((chance - won) ** 2 for chance, _, won, _ in sample) / len(sample)
+mae = sum(abs(chance - won) for chance, _, won, _ in sample) / len(sample)
+blends = {}
+for weight in (.1, .2, .3, .4, .5):
+    blended = [(1 - weight) * chance + weight * elo for chance, elo, _, _ in sample]
+    blends[str(weight)] = round(sum((chance >= .5) == bool(won) for chance, (_, _, won, _) in zip(blended, sample)) * 100 / len(sample), 1)
+elo_accuracy = sum((chance >= .5) == bool(won) for _, chance, won, _ in sample) * 100 / len(sample)
+result = {"tested_games": len(sample), "first_game": sample[0][3], "last_game": sample[-1][3], "winner_accuracy_percent": round(accuracy * 100, 1), "elo_accuracy_percent": round(elo_accuracy, 1), "blended_accuracy_percent": blends, "brier_score": round(brier, 4), "mean_absolute_error": round(mae, 4)}
 print(result)
 with open(database_path + ".result.json", "w", encoding="utf-8") as output:
     json.dump(result, output)

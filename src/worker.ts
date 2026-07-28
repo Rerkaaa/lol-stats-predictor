@@ -1,6 +1,7 @@
 import { ingestOracleGames } from "./oracle-ingest";
 import type { OracleGamePayload } from "./oracle";
 import { predictTimeAware, profileTeam, type PlayerGame, type RosterPlayer, type TeamGame } from "./prediction";
+import { opponentAdjustedElo, type EloMatch } from "./elo";
 import { predictValorant, profileValorantTeam, type ValorantMap } from "./valorant";
 
 export interface Env {
@@ -245,6 +246,16 @@ async function fullMatchDetails(env: Env, url: URL) {
 
 async function currentPatch(db: D1Database) {
   return db.prepare("SELECT patch,played_at playedAt FROM matches WHERE source_game_id LIKE 'oracle:%' AND played_at>='2022-01-01' AND patch IS NOT NULL AND patch<>'' ORDER BY played_at DESC LIMIT 1").first<{ patch: string; playedAt: string | null }>();
+}
+
+async function lolEloSignal(db: D1Database, leftId: number, rightId: number) {
+  const { results = [] } = await db.prepare(
+    `SELECT m.id matchId,m.played_at playedAt,s.team_id teamId,s.won
+     FROM matches m JOIN team_game_stats s ON s.match_id=m.id
+     WHERE m.source_game_id LIKE 'oracle:%' AND m.played_at>='2022-01-01'
+     ORDER BY m.played_at,m.id`,
+  ).all<EloMatch>();
+  return opponentAdjustedElo(results, leftId, rightId);
 }
 
 async function teamProfile(db: D1Database, id: number, patch: string | null, referenceDate: Date) {
@@ -707,15 +718,16 @@ export default {
       const latest = await currentPatch(env.DB);
       const patch = latest?.patch ?? null;
       const referenceDate = latest?.playedAt ? new Date(`${latest.playedAt.replace(" ", "T")}Z`) : new Date();
-      const [left, right] = await Promise.all([teamProfile(env.DB, leftId, patch, referenceDate), teamProfile(env.DB, rightId, patch, referenceDate)]);
+      const [left, right, elo] = await Promise.all([teamProfile(env.DB, leftId, patch, referenceDate), teamProfile(env.DB, rightId, patch, referenceDate), lolEloSignal(env.DB, leftId, rightId)]);
       if (!left || !right) return json({ error: "Both teams need imported Oracle's Elixir statistics." }, 404);
-      const prediction = predictTimeAware(left, right, killsLine, durationLine);
+      const prediction = predictTimeAware(left, right, killsLine, durationLine, elo);
       return json({
         teamA: left.name,
         teamB: right.name,
         ...prediction,
         model: "Time-aware roster and patch model",
         currentPatch: patch,
+        elo: { teamA: Math.round(elo.leftRating), teamB: Math.round(elo.rightRating), probabilityA: elo.probabilityA },
         asOf: latest?.playedAt ?? [left.lastGameAt, right.lastGameAt].filter((date): date is string => !!date).sort().at(-1) ?? null,
         teamAContext: { games: left.games, effectiveGames: left.effectiveGames, recentGames: left.recentGames, roster: left.roster, patchPlayerGames: left.patchPlayerGames },
         teamBContext: { games: right.games, effectiveGames: right.effectiveGames, recentGames: right.recentGames, roster: right.roster, patchPlayerGames: right.patchPlayerGames },

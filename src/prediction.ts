@@ -63,6 +63,7 @@ export type TeamProfile = {
 };
 
 export type PredictionFactor = { name: string; edge: number | null; weight: number };
+export type EloSignal = { leftRating: number; rightRating: number; probabilityA: number };
 
 const DAY = 86_400_000;
 const number = (value: number | null | undefined) => (value === null || value === undefined || !Number.isFinite(value) ? null : value);
@@ -183,8 +184,8 @@ function mapForecast(
   };
 }
 
-export function predictTimeAware(left: TeamProfile, right: TeamProfile, killsLine: number | null = null, durationLine: number | null = null) {
-  const factors: PredictionFactor[] = [
+export function predictTimeAware(left: TeamProfile, right: TeamProfile, killsLine: number | null = null, durationLine: number | null = null, elo: EloSignal | null = null) {
+  const baseFactors: PredictionFactor[] = [
     { name: "Recency-weighted win rate", edge: scaledEdge(left.winRate, right.winRate, 0.2), weight: 0.18 },
     { name: "Recent 45-day form", edge: scaledEdge(left.recentWinRate, right.recentWinRate, 0.25), weight: 0.12 },
     { name: "Gold diff @15", edge: scaledEdge(left.gd15, right.gd15, 1200), weight: 0.14 },
@@ -199,7 +200,7 @@ export function predictTimeAware(left: TeamProfile, right: TeamProfile, killsLin
     { name: "Vision / min", edge: scaledEdge(left.vision, right.vision, 0.8), weight: 0.03 },
     { name: "Side win rate", edge: scaledEdge(left.sideWinRate, right.sideWinRate, 0.25), weight: 0.02 },
   ];
-  const available = factors.filter((factor) => factor.edge !== null);
+  const available = baseFactors.filter((factor) => factor.edge !== null);
   const activeWeight = available.reduce((total, factor) => total + factor.weight, 0);
   const rawScore = activeWeight ? available.reduce((total, factor) => total + (factor.edge ?? 0) * factor.weight / activeWeight, 0) : 0;
   const effectiveGames = Math.min(left.effectiveGames, right.effectiveGames);
@@ -208,9 +209,15 @@ export function predictTimeAware(left: TeamProfile, right: TeamProfile, killsLin
   const patchConfidence = Math.min(1, Math.min(left.patchPlayerGames, right.patchPlayerGames) / 15);
   const confidence = Math.min(1, activeWeight * sampleConfidence * (0.7 + 0.2 * rosterConfidence + 0.1 * patchConfidence));
   const calibratedScore = rawScore * 2.1 * Math.max(0.4, confidence);
-  const probabilityA = 1 / (1 + Math.exp(-calibratedScore));
+  const modelProbabilityA = 1 / (1 + Math.exp(-calibratedScore));
+  // The rolling replay selected a conservative 40% Elo probability blend.
+  // Elo measures opponent strength; the time-aware model retains the majority
+  // share for current form, roster, and early-game statistics.
+  const eloBlend = elo ? 0.4 : 0;
+  const probabilityA = modelProbabilityA * (1 - eloBlend) + (elo?.probabilityA ?? 0.5) * eloBlend;
+  const factors = [...baseFactors.map((factor) => ({ ...factor, weight: factor.weight * (1 - eloBlend) })), ...(elo ? [{ name: "Opponent-adjusted Elo", edge: scaledEdge(elo.leftRating, elo.rightRating, 200), weight: eloBlend }] : [])];
   return {
-    probabilityA, probabilityB: 1 - probabilityA, factors, activeWeight, confidence,
+    probabilityA, probabilityB: 1 - probabilityA, factors, activeWeight: activeWeight * (1 - eloBlend) + eloBlend, confidence,
     mapForecasts: {
       totalKills: mapForecast(left.totalKills, right.totalKills, left.totalKillsDeviation, right.totalKillsDeviation, killsLine, 4),
       duration: mapForecast(left.durationMinutes, right.durationMinutes, left.durationDeviation, right.durationDeviation, durationLine, 3),
