@@ -86,7 +86,7 @@ export function profileValorantTeam(id: number, name: string, maps: ValorantMap[
   };
 }
 
-export function predictValorant(left: ValorantProfile, right: ValorantProfile, roundsLine: number | null = null, bestOf = 3) {
+export function predictValorant(left: ValorantProfile, right: ValorantProfile, roundsLine: number | null = null, bestOf = 3, metaCoverage: number | null = null) {
   const factors = [
     ["Recency-weighted map win rate", edge(left.winRate, right.winRate, 0.20), 0.48],
     ["Round differential", edge(left.roundDiff, right.roundDiff, 4), 0.37],
@@ -100,6 +100,10 @@ export function predictValorant(left: ValorantProfile, right: ValorantProfile, r
   // confidence rather than treating stability itself as an automatic winner edge.
   const continuity = [left.rosterContinuity, right.rosterContinuity].filter(valid);
   const rosterConfidence = continuity.length ? 0.75 + 0.25 * (continuity.reduce((sum, value) => sum + value, 0) / continuity.length) : 1;
+  // Agent selections automatically describe the live pro meta even when the
+  // source does not publish an explicit patch number. Sparse current-meta data
+  // reduces certainty, but cannot favor a side before the draft is known.
+  const metaConfidence = metaCoverage === null ? 1 : 0.85 + 0.15 * Math.max(0, Math.min(1, metaCoverage));
   // Rolling 2025–2026 replay calibration: a conservative scale reduced Brier error
   // versus the previously overconfident raw model.
   const probabilityA = 1 / (1 + Math.exp(-(raw * 0.9 * Math.max(0.45, coverage))));
@@ -107,5 +111,5 @@ export function predictValorant(left: ValorantProfile, right: ValorantProfile, r
   const roundsDeviation = expectedRounds === null ? null : Math.max(2.4, Math.sqrt(((left.totalRoundsDeviation ?? 2.4) ** 2 + (right.totalRoundsDeviation ?? 2.4) ** 2) / 2));
   const probabilityOver = expectedRounds === null || roundsDeviation === null || roundsLine === null ? null : 1 - normalCdf((roundsLine - expectedRounds) / roundsDeviation);
   const seriesProbabilityA = seriesWinChance(probabilityA, bestOf);
-  return { probabilityA, probabilityB: 1 - probabilityA, seriesProbabilityA, seriesProbabilityB: 1 - seriesProbabilityA, bestOf, factors, activeWeight, confidence: coverage * rosterConfidence, roundsForecast: expectedRounds === null || roundsDeviation === null ? null : { expected: expectedRounds, typicalLow: expectedRounds - .67449 * roundsDeviation, typicalHigh: expectedRounds + .67449 * roundsDeviation, line: roundsLine, probabilityOverLine: probabilityOver, probabilityUnderLine: probabilityOver === null ? null : 1 - probabilityOver } };
+  return { probabilityA, probabilityB: 1 - probabilityA, seriesProbabilityA, seriesProbabilityB: 1 - seriesProbabilityA, bestOf, factors, activeWeight, confidence: coverage * rosterConfidence * metaConfidence, roundsForecast: expectedRounds === null || roundsDeviation === null ? null : { expected: expectedRounds, typicalLow: expectedRounds - .67449 * roundsDeviation, typicalHigh: expectedRounds + .67449 * roundsDeviation, line: roundsLine, probabilityOverLine: probabilityOver, probabilityUnderLine: probabilityOver === null ? null : 1 - probabilityOver } };
 }
