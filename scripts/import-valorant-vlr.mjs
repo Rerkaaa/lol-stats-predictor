@@ -3,6 +3,7 @@ const token = process.env.VALORANT_IMPORT_TOKEN;
 const dryRun = process.env.VALORANT_DRY_RUN === "1";
 const eventLimit = Math.max(1, Math.min(60, Number(process.env.VLR_EVENT_LIMIT || 60)));
 const matchLimit = Math.max(1, Math.min(800, Number(process.env.VLR_MATCH_LIMIT || 800)));
+const importBatchSize = Math.max(1, Math.min(10, Number(process.env.VLR_IMPORT_BATCH_SIZE || 5)));
 const years = process.argv.slice(2).map(Number).filter((year) => year === 2025 || year === 2026);
 const targetYears = years.length ? years : [2025, 2026];
 
@@ -22,11 +23,22 @@ async function get(path) {
 
 async function post(series) {
   if (dryRun) { console.log(`Dry run: parsed ${series.length} series.`, series.map((item) => `${item.teamA} vs ${item.teamB} (${item.maps.length} maps; ${item.maps.map((map) => map.players?.length ?? 0).join("/")} player rows)`).join("; ")); return { dryRun: true }; }
-  const response = await fetch(`${workerUrl}/api/admin/valorant/series`, {
-    method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ series }),
-  });
-  if (!response.ok) throw new Error(`Worker import returned HTTP ${response.status}: ${await response.text()}`);
-  return response.json();
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    try {
+      const response = await fetch(`${workerUrl}/api/admin/valorant/series`, {
+        method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ series }),
+      });
+      if (response.ok) return response.json();
+      const body = await response.text();
+      if (response.status < 500 || attempt === 4) throw new Error(`Worker import returned HTTP ${response.status}: ${body}`);
+      console.warn(`Temporary Worker/D1 error on import batch (attempt ${attempt}/4): ${body}`);
+    } catch (error) {
+      if (attempt === 4) throw error;
+      console.warn(`Import batch request failed (attempt ${attempt}/4): ${error instanceof Error ? error.message : String(error)}`);
+    }
+    await sleep(1_500 * attempt);
+  }
+  throw new Error("Unreachable import retry state");
 }
 
 function eventLinks(html) {
@@ -134,7 +146,7 @@ for (const meta of uniqueMatches) {
   } catch (error) {
     console.warn(`Skipping VLR match ${meta.id}: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (imported.length === 25) { console.log(await post(imported.splice(0, imported.length))); }
+  if (imported.length === importBatchSize) { console.log(await post(imported.splice(0, imported.length))); }
 }
 if (imported.length) console.log(await post(imported));
 console.log("Valorant VCT import complete.");
