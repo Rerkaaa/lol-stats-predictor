@@ -496,9 +496,23 @@ async function valorantProfile(db: D1Database, teamId: number, mapName: string |
      WHERE (s.team_a_id=? OR s.team_b_id=?) AND (? IS NULL OR m.map_name=?) GROUP BY m.id ORDER BY s.played_at DESC`,
   ).bind(teamId, teamId, teamId, teamId, teamId, teamId, mapName, mapName).all<ValorantMap>();
   const { results: rosterRows = [] } = await db.prepare(
-    `SELECT player_name name,COUNT(*) games FROM valorant_player_maps WHERE team_id=? GROUP BY player_name ORDER BY games DESC,MAX(id) DESC LIMIT 8`,
-  ).bind(teamId).all<{ name: string }>();
-  return profileValorantTeam(team.id, team.name, rows, rosterRows.map((row) => row.name));
+    `SELECT p.player_name name
+     FROM valorant_player_maps p JOIN valorant_maps m ON m.id=p.map_id JOIN valorant_series s ON s.id=m.series_id
+     WHERE p.team_id=? AND p.map_id=(SELECT p2.map_id FROM valorant_player_maps p2 JOIN valorant_maps m2 ON m2.id=p2.map_id JOIN valorant_series s2 ON s2.id=m2.series_id WHERE p2.team_id=? ORDER BY s2.played_at DESC,p2.map_id DESC LIMIT 1)
+     ORDER BY p.acs DESC`,
+  ).bind(teamId, teamId).all<{ name: string }>();
+  const continuityRow = await db.prepare(
+    `WITH recent_maps AS (
+       SELECT m.id FROM valorant_maps m JOIN valorant_series s ON s.id=m.series_id
+       WHERE s.team_a_id=? OR s.team_b_id=? ORDER BY s.played_at DESC,m.id DESC LIMIT 8
+     ), latest_lineup AS (
+       SELECT player_name FROM valorant_player_maps WHERE team_id=? AND map_id=(SELECT id FROM recent_maps LIMIT 1)
+     )
+     SELECT CASE WHEN (SELECT COUNT(*) FROM recent_maps)=0 OR (SELECT COUNT(*) FROM latest_lineup)=0 THEN NULL
+       ELSE 1.0*SUM(CASE WHEN p.player_name IN (SELECT player_name FROM latest_lineup) THEN 1 ELSE 0 END)/((SELECT COUNT(*) FROM recent_maps)*(SELECT COUNT(*) FROM latest_lineup)) END continuity
+     FROM valorant_player_maps p WHERE p.team_id=? AND p.map_id IN (SELECT id FROM recent_maps)`,
+  ).bind(teamId, teamId, teamId, teamId).first<{ continuity: number | null }>();
+  return profileValorantTeam(team.id, team.name, rows, rosterRows.map((row) => row.name), continuityRow?.continuity ?? null);
 }
 
 async function handleValorantAdmin(request: Request, env: Env) {

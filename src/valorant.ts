@@ -26,6 +26,7 @@ export type ValorantProfile = {
   totalRounds: number | null;
   totalRoundsDeviation: number | null;
   roster: string[];
+  rosterContinuity: number | null;
   lastMapAt: string | null;
 };
 
@@ -68,7 +69,7 @@ const seriesWinChance = (mapChance: number, bestOf: number) => {
   return chance;
 };
 
-export function profileValorantTeam(id: number, name: string, maps: ValorantMap[], roster: string[], now = new Date()): ValorantProfile {
+export function profileValorantTeam(id: number, name: string, maps: ValorantMap[], roster: string[], rosterContinuity: number | null = null, now = new Date()): ValorantProfile {
   const weighted = maps.map((map) => [map, weightFor(map.playedAt, now)] as const);
   const metric = (pick: (map: ValorantMap) => number | null) => average(weighted.map(([map, weight]) => [pick(map), weight]));
   const recent = maps.filter((map) => ageDays(map.playedAt, now) <= 35);
@@ -81,7 +82,7 @@ export function profileValorantTeam(id: number, name: string, maps: ValorantMap[
     kda: metric((map) => map.kills === null || map.deaths === null || map.assists === null ? null : (map.kills + map.assists) / Math.max(1, map.deaths)),
     openingDiff: metric((map) => map.firstKills === null || map.firstDeaths === null ? null : map.firstKills - map.firstDeaths),
     totalRounds: rounds.mean, totalRoundsDeviation: rounds.deviation,
-    roster, lastMapAt: maps.map((map) => map.playedAt).sort().at(-1) ?? null,
+    roster, rosterContinuity, lastMapAt: maps.map((map) => map.playedAt).sort().at(-1) ?? null,
   };
 }
 
@@ -95,6 +96,10 @@ export function predictValorant(left: ValorantProfile, right: ValorantProfile, r
   const activeWeight = available.reduce((sum, factor) => sum + factor.weight, 0);
   const raw = activeWeight ? available.reduce((sum, factor) => sum + (factor.edge ?? 0) * factor.weight / activeWeight, 0) : 0;
   const coverage = Math.min(1, Math.min(left.effectiveMaps, right.effectiveMaps) / 25);
+  // A newly changed roster makes historical form less representative. This adjusts
+  // confidence rather than treating stability itself as an automatic winner edge.
+  const continuity = [left.rosterContinuity, right.rosterContinuity].filter(valid);
+  const rosterConfidence = continuity.length ? 0.75 + 0.25 * (continuity.reduce((sum, value) => sum + value, 0) / continuity.length) : 1;
   // Rolling 2025–2026 replay calibration: a conservative scale reduced Brier error
   // versus the previously overconfident raw model.
   const probabilityA = 1 / (1 + Math.exp(-(raw * 0.9 * Math.max(0.45, coverage))));
@@ -102,5 +107,5 @@ export function predictValorant(left: ValorantProfile, right: ValorantProfile, r
   const roundsDeviation = expectedRounds === null ? null : Math.max(2.4, Math.sqrt(((left.totalRoundsDeviation ?? 2.4) ** 2 + (right.totalRoundsDeviation ?? 2.4) ** 2) / 2));
   const probabilityOver = expectedRounds === null || roundsDeviation === null || roundsLine === null ? null : 1 - normalCdf((roundsLine - expectedRounds) / roundsDeviation);
   const seriesProbabilityA = seriesWinChance(probabilityA, bestOf);
-  return { probabilityA, probabilityB: 1 - probabilityA, seriesProbabilityA, seriesProbabilityB: 1 - seriesProbabilityA, bestOf, factors, activeWeight, confidence: coverage, roundsForecast: expectedRounds === null || roundsDeviation === null ? null : { expected: expectedRounds, typicalLow: expectedRounds - .67449 * roundsDeviation, typicalHigh: expectedRounds + .67449 * roundsDeviation, line: roundsLine, probabilityOverLine: probabilityOver, probabilityUnderLine: probabilityOver === null ? null : 1 - probabilityOver } };
+  return { probabilityA, probabilityB: 1 - probabilityA, seriesProbabilityA, seriesProbabilityB: 1 - seriesProbabilityA, bestOf, factors, activeWeight, confidence: coverage * rosterConfidence, roundsForecast: expectedRounds === null || roundsDeviation === null ? null : { expected: expectedRounds, typicalLow: expectedRounds - .67449 * roundsDeviation, typicalHigh: expectedRounds + .67449 * roundsDeviation, line: roundsLine, probabilityOverLine: probabilityOver, probabilityUnderLine: probabilityOver === null ? null : 1 - probabilityOver } };
 }
