@@ -89,7 +89,7 @@ export function profileValorantTeam(id: number, name: string, maps: ValorantMap[
   };
 }
 
-export function predictValorant(left: ValorantProfile, right: ValorantProfile, roundsLine: number | null = null, bestOf = 3, metaCoverage: number | null = null, elo: { leftRating: number; rightRating: number; probabilityA: number } | null = null, lineup: { leftAdr: number | null; rightAdr: number | null; confirmed: boolean } | null = null) {
+export function predictValorant(left: ValorantProfile, right: ValorantProfile, roundsLine: number | null = null, bestOf = 3, metaCoverage: number | null = null, elo: { leftRating: number; rightRating: number; probabilityA: number } | null = null, lineup: { leftAdr: number | null; rightAdr: number | null; leftKda: number | null; rightKda: number | null; confirmed: boolean } | null = null) {
   const baseFactors = [
     ["Recency-weighted map win rate", edge(left.winRate, right.winRate, 0.20), 0.44],
     ["Round differential", edge(left.roundDiff, right.roundDiff, 4), 0.34],
@@ -97,6 +97,7 @@ export function predictValorant(left: ValorantProfile, right: ValorantProfile, r
     ["Recent roster ADR", edge(left.adr, right.adr, 25), 0.08],
   ].map(([name, value, weight]) => ({ name: name as string, edge: value as number | null, weight: weight as number }));
   if (lineup?.confirmed) baseFactors.push({ name: "Confirmed starting-five ADR", edge: edge(lineup.leftAdr, lineup.rightAdr, 25), weight: .04 });
+  if (lineup?.confirmed) baseFactors.push({ name: "Confirmed starting-five KDA", edge: edge(lineup.leftKda, lineup.rightKda, .50), weight: .06 });
   const available = baseFactors.filter((factor) => factor.edge !== null);
   const activeWeight = available.reduce((sum, factor) => sum + factor.weight, 0);
   const raw = activeWeight ? available.reduce((sum, factor) => sum + (factor.edge ?? 0) * factor.weight / activeWeight, 0) : 0;
