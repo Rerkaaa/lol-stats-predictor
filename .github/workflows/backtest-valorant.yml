@@ -34,9 +34,9 @@ jobs:
       - name: Replay all eligible Valorant maps and series
         run: python scripts/backtest-valorant.py /tmp/valorant-backtest.sql
       - name: Publish result in the log
-        run: cat /tmp/valorant-backtest.sql.valorant-result.json
+        run: cat /tmp/valorant-backtest.sql.sqlite.valorant-result.json
       - uses: actions/upload-artifact@v4
         with:
           name: full-valorant-backtest-result
-          path: /tmp/valorant-backtest.sql.valorant-result.json
+          path: /tmp/valorant-backtest.sql.sqlite.valorant-result.json
           if-no-files-found: error
