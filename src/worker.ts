@@ -275,6 +275,18 @@ async function lolEloSignal(db: D1Database, leftId: number, rightId: number) {
   return opponentAdjustedElo(results, leftId, rightId);
 }
 
+async function valorantEloSignal(db: D1Database, leftId: number, rightId: number) {
+  const { results = [] } = await db.prepare(
+    `SELECT s.id matchId,s.played_at playedAt,s.team_a_id teamId,CASE WHEN s.winner_team_id=s.team_a_id THEN 1 ELSE 0 END won
+     FROM valorant_series s WHERE s.winner_team_id IS NOT NULL
+     UNION ALL
+     SELECT s.id matchId,s.played_at playedAt,s.team_b_id teamId,CASE WHEN s.winner_team_id=s.team_b_id THEN 1 ELSE 0 END won
+     FROM valorant_series s WHERE s.winner_team_id IS NOT NULL
+     ORDER BY playedAt,matchId`,
+  ).all<EloMatch>();
+  return opponentAdjustedElo(results, leftId, rightId);
+}
+
 async function teamProfile(db: D1Database, id: number, patch: string | null, referenceDate: Date, expectedLineup: string[] = []) {
   const team = await db.prepare("SELECT id,name FROM teams WHERE id=?").bind(id).first<TeamRow>();
   if (!team) return null;
@@ -764,13 +776,13 @@ export default {
       const requestedBestOf = Number(url.searchParams.get("bestOf"));
       const bestOf = [1, 3, 5].includes(requestedBestOf) ? requestedBestOf : 3;
       const draftA = parseValorantDraft(url.searchParams.get("draftA")), draftB = parseValorantDraft(url.searchParams.get("draftB"));
-      const [left, right, headToHead, meta, draftAStats, draftBStats, playerFormA, playerFormB] = await Promise.all([
+      const [left, right, headToHead, meta, draftAStats, draftBStats, playerFormA, playerFormB, elo] = await Promise.all([
         valorantProfile(env.DB, leftId, mapName), valorantProfile(env.DB, rightId, mapName), valorantHeadToHead(env.DB, leftId, rightId), valorantRollingMeta(env.DB, leftId, rightId),
-        valorantDraftFit(env.DB, leftId, draftA), valorantDraftFit(env.DB, rightId, draftB), valorantPlayerForm(env.DB, leftId), valorantPlayerForm(env.DB, rightId),
+        valorantDraftFit(env.DB, leftId, draftA), valorantDraftFit(env.DB, rightId, draftB), valorantPlayerForm(env.DB, leftId), valorantPlayerForm(env.DB, rightId), valorantEloSignal(env.DB, leftId, rightId),
       ]);
       if (!left || !right || left.maps < 3 || right.maps < 3) return json({ error: "Both teams need at least three imported Valorant maps from 2025–2026." }, 404);
-      const prediction = predictValorant(left, right, roundsLine, bestOf, meta.coverage);
-      return json({ teamA: left.name, teamB: right.name, selectedMap: mapName, ...prediction, model: "Valorant time-aware map model", teamAContext: left, teamBContext: right, headToHead, meta, draft: { teamA: draftAStats, teamB: draftBStats }, playerForm: { teamA: playerFormA, teamB: playerFormB } });
+      const prediction = predictValorant(left, right, roundsLine, bestOf, meta.coverage, elo);
+      return json({ teamA: left.name, teamB: right.name, selectedMap: mapName, ...prediction, model: "Valorant time-aware map and series model", elo: { teamA: Math.round(elo.leftRating), teamB: Math.round(elo.rightRating), probabilityA: elo.probabilityA }, teamAContext: left, teamBContext: right, headToHead, meta, draft: { teamA: draftAStats, teamB: draftBStats }, playerForm: { teamA: playerFormA, teamB: playerFormB } });
     }
     if (url.pathname === "/api/latest-series") return json(await latestSeries(env.DB));
     if (url.pathname === "/api/match-history") {

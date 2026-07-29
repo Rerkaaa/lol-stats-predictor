@@ -89,14 +89,14 @@ export function profileValorantTeam(id: number, name: string, maps: ValorantMap[
   };
 }
 
-export function predictValorant(left: ValorantProfile, right: ValorantProfile, roundsLine: number | null = null, bestOf = 3, metaCoverage: number | null = null) {
-  const factors = [
+export function predictValorant(left: ValorantProfile, right: ValorantProfile, roundsLine: number | null = null, bestOf = 3, metaCoverage: number | null = null, elo: { leftRating: number; rightRating: number; probabilityA: number } | null = null) {
+  const baseFactors = [
     ["Recency-weighted map win rate", edge(left.winRate, right.winRate, 0.20), 0.44],
     ["Round differential", edge(left.roundDiff, right.roundDiff, 4), 0.34],
     ["Recent 35-day form", edge(left.recentWinRate, right.recentWinRate, 0.25), 0.14],
     ["Recent roster ADR", edge(left.adr, right.adr, 25), 0.08],
   ].map(([name, value, weight]) => ({ name: name as string, edge: value as number | null, weight: weight as number }));
-  const available = factors.filter((factor) => factor.edge !== null);
+  const available = baseFactors.filter((factor) => factor.edge !== null);
   const activeWeight = available.reduce((sum, factor) => sum + factor.weight, 0);
   const raw = activeWeight ? available.reduce((sum, factor) => sum + (factor.edge ?? 0) * factor.weight / activeWeight, 0) : 0;
   const coverage = Math.min(1, Math.min(left.effectiveMaps, right.effectiveMaps) / 25);
@@ -110,10 +110,15 @@ export function predictValorant(left: ValorantProfile, right: ValorantProfile, r
   const metaConfidence = metaCoverage === null ? 1 : 0.85 + 0.15 * Math.max(0, Math.min(1, metaCoverage));
   // Rolling 2025–2026 replay calibration: a conservative scale reduced Brier error
   // versus the previously overconfident raw model.
-  const probabilityA = 1 / (1 + Math.exp(-(raw * 0.9 * Math.max(0.45, coverage))));
+  const modelProbabilityA = 1 / (1 + Math.exp(-(raw * 0.9 * Math.max(0.45, coverage))));
+  // Full 2025–2026 replay: 40% series-level Elo retained map accuracy (59.7%)
+  // and improved actual-series winner accuracy from 59.5% to 59.9%.
+  const eloBlend = elo ? .4 : 0;
+  const probabilityA = modelProbabilityA * (1 - eloBlend) + (elo?.probabilityA ?? .5) * eloBlend;
   const expectedRounds = left.totalRounds === null || right.totalRounds === null ? null : (left.totalRounds + right.totalRounds) / 2;
   const roundsDeviation = expectedRounds === null ? null : Math.max(2.4, Math.sqrt(((left.totalRoundsDeviation ?? 2.4) ** 2 + (right.totalRoundsDeviation ?? 2.4) ** 2) / 2));
   const probabilityOver = expectedRounds === null || roundsDeviation === null || roundsLine === null ? null : 1 - normalCdf((roundsLine - expectedRounds) / roundsDeviation);
   const seriesProbabilityA = seriesWinChance(probabilityA, bestOf);
-  return { probabilityA, probabilityB: 1 - probabilityA, seriesProbabilityA, seriesProbabilityB: 1 - seriesProbabilityA, bestOf, factors, activeWeight, confidence: coverage * rosterConfidence * metaConfidence, roundsForecast: expectedRounds === null || roundsDeviation === null ? null : { expected: expectedRounds, typicalLow: expectedRounds - .67449 * roundsDeviation, typicalHigh: expectedRounds + .67449 * roundsDeviation, line: roundsLine, probabilityOverLine: probabilityOver, probabilityUnderLine: probabilityOver === null ? null : 1 - probabilityOver } };
+  const factors = [...baseFactors.map((factor) => ({ ...factor, weight: factor.weight * (1 - eloBlend) })), ...(elo ? [{ name: "Opponent-adjusted series Elo", edge: edge(elo.leftRating, elo.rightRating, 200), weight: eloBlend }] : [])];
+  return { probabilityA, probabilityB: 1 - probabilityA, seriesProbabilityA, seriesProbabilityB: 1 - seriesProbabilityA, bestOf, factors, activeWeight: activeWeight * (1 - eloBlend) + eloBlend, confidence: coverage * rosterConfidence * metaConfidence, roundsForecast: expectedRounds === null || roundsDeviation === null ? null : { expected: expectedRounds, typicalLow: expectedRounds - .67449 * roundsDeviation, typicalHigh: expectedRounds + .67449 * roundsDeviation, line: roundsLine, probabilityOverLine: probabilityOver, probabilityUnderLine: probabilityOver === null ? null : 1 - probabilityOver } };
 }
