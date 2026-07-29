@@ -89,13 +89,14 @@ export function profileValorantTeam(id: number, name: string, maps: ValorantMap[
   };
 }
 
-export function predictValorant(left: ValorantProfile, right: ValorantProfile, roundsLine: number | null = null, bestOf = 3, metaCoverage: number | null = null, elo: { leftRating: number; rightRating: number; probabilityA: number } | null = null) {
+export function predictValorant(left: ValorantProfile, right: ValorantProfile, roundsLine: number | null = null, bestOf = 3, metaCoverage: number | null = null, elo: { leftRating: number; rightRating: number; probabilityA: number } | null = null, lineup: { leftAdr: number | null; rightAdr: number | null; confirmed: boolean } | null = null) {
   const baseFactors = [
     ["Recency-weighted map win rate", edge(left.winRate, right.winRate, 0.20), 0.44],
     ["Round differential", edge(left.roundDiff, right.roundDiff, 4), 0.34],
     ["Recent 35-day form", edge(left.recentWinRate, right.recentWinRate, 0.25), 0.14],
     ["Recent roster ADR", edge(left.adr, right.adr, 25), 0.08],
   ].map(([name, value, weight]) => ({ name: name as string, edge: value as number | null, weight: weight as number }));
+  if (lineup?.confirmed) baseFactors.push({ name: "Confirmed starting-five ADR", edge: edge(lineup.leftAdr, lineup.rightAdr, 25), weight: .04 });
   const available = baseFactors.filter((factor) => factor.edge !== null);
   const activeWeight = available.reduce((sum, factor) => sum + factor.weight, 0);
   const raw = activeWeight ? available.reduce((sum, factor) => sum + (factor.edge ?? 0) * factor.weight / activeWeight, 0) : 0;
@@ -119,6 +120,6 @@ export function predictValorant(left: ValorantProfile, right: ValorantProfile, r
   const roundsDeviation = expectedRounds === null ? null : Math.max(2.4, Math.sqrt(((left.totalRoundsDeviation ?? 2.4) ** 2 + (right.totalRoundsDeviation ?? 2.4) ** 2) / 2));
   const probabilityOver = expectedRounds === null || roundsDeviation === null || roundsLine === null ? null : 1 - normalCdf((roundsLine - expectedRounds) / roundsDeviation);
   const seriesProbabilityA = seriesWinChance(probabilityA, bestOf);
-  const factors = [...baseFactors.map((factor) => ({ ...factor, weight: factor.weight * (1 - eloBlend) })), ...(elo ? [{ name: "Opponent-adjusted series Elo", edge: edge(elo.leftRating, elo.rightRating, 200), weight: eloBlend }] : [])];
+  const factors = [...baseFactors.map((factor) => ({ ...factor, weight: factor.edge === null ? 0 : factor.weight / activeWeight * (1 - eloBlend) })), ...(elo ? [{ name: "Opponent-adjusted series Elo", edge: edge(elo.leftRating, elo.rightRating, 200), weight: eloBlend }] : [])];
   return { probabilityA, probabilityB: 1 - probabilityA, seriesProbabilityA, seriesProbabilityB: 1 - seriesProbabilityA, bestOf, factors, activeWeight: activeWeight * (1 - eloBlend) + eloBlend, confidence: coverage * rosterConfidence * metaConfidence, roundsForecast: expectedRounds === null || roundsDeviation === null ? null : { expected: expectedRounds, typicalLow: expectedRounds - .67449 * roundsDeviation, typicalHigh: expectedRounds + .67449 * roundsDeviation, line: roundsLine, probabilityOverLine: probabilityOver, probabilityUnderLine: probabilityOver === null ? null : 1 - probabilityOver } };
 }

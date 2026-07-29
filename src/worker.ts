@@ -645,6 +645,37 @@ async function valorantRollingMeta(db: D1Database, teamA: number, teamB: number)
 }
 
 const parseValorantDraft = (value: string | null) => [...new Set((value ?? "").split(",").map((agent) => agent.trim()).filter((agent) => agent.length >= 2 && agent.length <= 24))].slice(0, 5);
+const parseValorantLineup = (value: string | null) => [...new Set((value ?? "").split(",").map((name) => name.trim()).filter((name) => name.length >= 1 && name.length <= 60))].slice(0, 5);
+
+async function valorantRoster(db: D1Database, teamId: number) {
+  const { results = [] } = await db.prepare(
+    `SELECT p.player_name name,COUNT(DISTINCT p.map_id) maps
+     FROM valorant_player_maps p JOIN valorant_maps m ON m.id=p.map_id JOIN valorant_series s ON s.id=m.series_id
+     WHERE p.team_id=? AND p.map_id=(SELECT p2.map_id FROM valorant_player_maps p2 JOIN valorant_maps m2 ON m2.id=p2.map_id JOIN valorant_series s2 ON s2.id=m2.series_id WHERE p2.team_id=? ORDER BY s2.played_at DESC,p2.map_id DESC LIMIT 1)
+     GROUP BY p.player_name ORDER BY maps DESC,p.player_name`,
+  ).bind(teamId, teamId).all<{ name: string; maps: number }>();
+  return results;
+}
+
+async function valorantConfirmedLineupAdr(db: D1Database, teamId: number, lineup: string[]) {
+  if (lineup.length !== 5) return null;
+  const latest = await db.prepare("SELECT MAX(played_at) latestAt FROM valorant_series").first<{ latestAt: string | null }>();
+  if (!latest?.latestAt) return null;
+  const { results = [] } = await db.prepare(
+    `SELECT s.played_at playedAt,p.adr FROM valorant_player_maps p JOIN valorant_maps m ON m.id=p.map_id JOIN valorant_series s ON s.id=m.series_id
+     WHERE p.team_id=? AND p.player_name IN (${lineup.map(() => "?").join(",")}) AND p.adr IS NOT NULL`,
+  ).bind(teamId, ...lineup).all<{ playedAt: string; adr: number }>();
+  const now = Date.parse(latest.latestAt.endsWith("Z") ? latest.latestAt : `${latest.latestAt.replace(" ", "T")}Z`);
+  let total = 0, weightTotal = 0;
+  for (const row of results) {
+    const played = Date.parse(row.playedAt.endsWith("Z") ? row.playedAt : `${row.playedAt.replace(" ", "T")}Z`);
+    const age = Number.isFinite(played) && Number.isFinite(now) ? Math.max(0, (now - played) / 86_400_000) : 365;
+    const weight = Math.max(.08, .5 ** (age / 45));
+    total += row.adr * weight;
+    weightTotal += weight;
+  }
+  return weightTotal ? total / weightTotal : null;
+}
 
 async function valorantDraftFit(db: D1Database, teamId: number, agents: string[]) {
   if (!agents.length) return null;
@@ -755,6 +786,11 @@ export default {
       const { results = [] } = await env.DB.prepare("SELECT map_name name,COUNT(*) maps FROM valorant_maps GROUP BY map_name HAVING maps>=5 ORDER BY name").all();
       return json(results);
     }
+    if (url.pathname === "/api/valorant/roster") {
+      const teamId = Number(url.searchParams.get("team"));
+      if (!Number.isInteger(teamId)) return json({ error: "Choose a team." }, 400);
+      return json(await valorantRoster(env.DB, teamId));
+    }
     if (url.pathname === "/api/valorant/latest-series") return json(await latestValorantSeries(env.DB));
     if (url.pathname === "/api/valorant/match-history") {
       const teamA = Number(url.searchParams.get("teamA")), teamB = Number(url.searchParams.get("teamB"));
@@ -776,13 +812,17 @@ export default {
       const requestedBestOf = Number(url.searchParams.get("bestOf"));
       const bestOf = [1, 3, 5].includes(requestedBestOf) ? requestedBestOf : 3;
       const draftA = parseValorantDraft(url.searchParams.get("draftA")), draftB = parseValorantDraft(url.searchParams.get("draftB"));
-      const [left, right, headToHead, meta, draftAStats, draftBStats, playerFormA, playerFormB, elo] = await Promise.all([
+      const lineupA = parseValorantLineup(url.searchParams.get("lineupA")), lineupB = parseValorantLineup(url.searchParams.get("lineupB"));
+      const lineupConfirmed = lineupA.length === 5 && lineupB.length === 5;
+      const [left, right, headToHead, meta, draftAStats, draftBStats, playerFormA, playerFormB, elo, lineupAdrA, lineupAdrB] = await Promise.all([
         valorantProfile(env.DB, leftId, mapName), valorantProfile(env.DB, rightId, mapName), valorantHeadToHead(env.DB, leftId, rightId), valorantRollingMeta(env.DB, leftId, rightId),
         valorantDraftFit(env.DB, leftId, draftA), valorantDraftFit(env.DB, rightId, draftB), valorantPlayerForm(env.DB, leftId), valorantPlayerForm(env.DB, rightId), valorantEloSignal(env.DB, leftId, rightId),
+        lineupConfirmed ? valorantConfirmedLineupAdr(env.DB, leftId, lineupA) : Promise.resolve(null), lineupConfirmed ? valorantConfirmedLineupAdr(env.DB, rightId, lineupB) : Promise.resolve(null),
       ]);
       if (!left || !right || left.maps < 3 || right.maps < 3) return json({ error: "Both teams need at least three imported Valorant maps from 2025–2026." }, 404);
-      const prediction = predictValorant(left, right, roundsLine, bestOf, meta.coverage, elo);
-      return json({ teamA: left.name, teamB: right.name, selectedMap: mapName, ...prediction, model: "Valorant time-aware map and series model", elo: { teamA: Math.round(elo.leftRating), teamB: Math.round(elo.rightRating), probabilityA: elo.probabilityA }, teamAContext: left, teamBContext: right, headToHead, meta, draft: { teamA: draftAStats, teamB: draftBStats }, playerForm: { teamA: playerFormA, teamB: playerFormB } });
+      const lineup = lineupConfirmed && lineupAdrA !== null && lineupAdrB !== null ? { leftAdr: lineupAdrA, rightAdr: lineupAdrB, confirmed: true } : null;
+      const prediction = predictValorant(left, right, roundsLine, bestOf, meta.coverage, elo, lineup);
+      return json({ teamA: left.name, teamB: right.name, selectedMap: mapName, ...prediction, model: "Valorant time-aware map and series model", elo: { teamA: Math.round(elo.leftRating), teamB: Math.round(elo.rightRating), probabilityA: elo.probabilityA }, teamAContext: left, teamBContext: right, headToHead, meta, lineup: { confirmed: !!lineup, teamA: lineupA, teamB: lineupB, adrA: lineupAdrA, adrB: lineupAdrB }, draft: { teamA: draftAStats, teamB: draftBStats }, playerForm: { teamA: playerFormA, teamB: playerFormB } });
     }
     if (url.pathname === "/api/latest-series") return json(await latestSeries(env.DB));
     if (url.pathname === "/api/match-history") {
