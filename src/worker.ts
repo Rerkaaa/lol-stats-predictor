@@ -258,7 +258,7 @@ async function lolEloSignal(db: D1Database, leftId: number, rightId: number) {
   return opponentAdjustedElo(results, leftId, rightId);
 }
 
-async function teamProfile(db: D1Database, id: number, patch: string | null, referenceDate: Date) {
+async function teamProfile(db: D1Database, id: number, patch: string | null, referenceDate: Date, expectedLineup: string[] = []) {
   const team = await db.prepare("SELECT id,name FROM teams WHERE id=?").bind(id).first<TeamRow>();
   if (!team) return null;
   const { results: rosterRows = [] } = await db
@@ -270,6 +270,8 @@ async function teamProfile(db: D1Database, id: number, patch: string | null, ref
     .bind(id)
     .all<RosterDbRow>();
   const roster: RosterPlayer[] = rosterRows.map((row) => ({ name: row.name, role: row.role, games: Number(row.games) }));
+  const confirmedLineup = expectedLineup.length === 5;
+  const activeNames = confirmedLineup ? expectedLineup : roster.map((player) => player.name);
   const { results: gameRows = [] } = await db
     .prepare(
       `SELECT s.match_id matchId,m.played_at playedAt,m.stage,m.patch,s.side,s.won,s.kills,s.deaths,s.assists,
@@ -280,12 +282,12 @@ async function teamProfile(db: D1Database, id: number, patch: string | null, ref
     .bind(id)
     .all<TeamGameDbRow>();
   if (!gameRows.length) return null;
-  const playerStatement = roster.length
+  const playerStatement = activeNames.length
     ? db.prepare(
         `SELECT p.match_id matchId,p.player_name playerName,m.played_at playedAt,m.patch,s.won,p.kills,p.deaths,p.assists,p.champion
          FROM player_game_stats p JOIN matches m ON m.id=p.match_id JOIN team_game_stats s ON s.match_id=p.match_id AND s.team_id=p.team_id
-         WHERE p.team_id=? AND p.player_name IN (${roster.map(() => "?").join(",")}) AND m.source_game_id LIKE 'oracle:%' AND m.played_at>='2022-01-01'`,
-      ).bind(id, ...roster.map((player) => player.name))
+         WHERE p.team_id=? AND p.player_name IN (${activeNames.map(() => "?").join(",")}) AND m.source_game_id LIKE 'oracle:%' AND m.played_at>='2022-01-01'`,
+      ).bind(id, ...activeNames)
     : db.prepare("SELECT NULL matchId,NULL playerName,NULL playedAt,NULL patch,NULL won,NULL kills,NULL deaths,NULL assists,NULL champion WHERE 0");
   const { results: playerRows = [] } = await playerStatement.all<PlayerGameDbRow>();
   const rosterByMatch = new Map<number, Set<string>>();
@@ -295,8 +297,8 @@ async function teamProfile(db: D1Database, id: number, patch: string | null, ref
     rosterByMatch.set(row.matchId, players);
   }
   const games: TeamGame[] = gameRows.map((row) => ({ ...row, rosterOverlap: rosterByMatch.get(row.matchId)?.size ?? 0 }));
-  const playerGames: PlayerGame[] = playerRows.map(({ matchId: _matchId, playerName: _playerName, ...row }) => row);
-  return profileTeam(team.id, team.name, games, roster, playerGames, patch, referenceDate);
+  const playerGames: PlayerGame[] = playerRows.map(({ matchId: _matchId, ...row }) => row);
+  return profileTeam(team.id, team.name, games, roster, playerGames, patch, confirmedLineup, referenceDate);
 }
 
 async function teamRoster(db: D1Database, id: number) {
@@ -779,7 +781,7 @@ export default {
       const latest = await currentPatch(env.DB);
       const patch = latest?.patch ?? null;
       const referenceDate = latest?.playedAt ? new Date(`${latest.playedAt.replace(" ", "T")}Z`) : new Date();
-      const [left, right, elo] = await Promise.all([teamProfile(env.DB, leftId, patch, referenceDate), teamProfile(env.DB, rightId, patch, referenceDate), lolEloSignal(env.DB, leftId, rightId)]);
+      const [left, right, elo] = await Promise.all([teamProfile(env.DB, leftId, patch, referenceDate, expectedLineupA), teamProfile(env.DB, rightId, patch, referenceDate, expectedLineupB), lolEloSignal(env.DB, leftId, rightId)]);
       if (!left || !right) return json({ error: "Both teams need imported Oracle's Elixir statistics." }, 404);
       const prediction = predictTimeAware(left, right, killsLine, durationLine, elo, bestOf);
       const lineupA = lineupConfirmation(left, expectedLineupA), lineupB = lineupConfirmation(right, expectedLineupB);

@@ -2,7 +2,7 @@
   const controls = document.querySelector("#predictorView .controls");
   if (!controls) return;
   controls.insertAdjacentHTML("beforeend", '<label>Series<select id="lolBestOf"><option value="1" selected>Bo1</option><option value="3">Bo3</option><option value="5">Bo5</option></select></label>');
-  controls.insertAdjacentHTML("afterend", '<section class="card expected-lineups"><div><h2>Expected lineup confirmation <small>(optional)</small></h2><p>Select the five players expected to start. A changed lineup reduces confidence rather than inventing statistics for a substitute.</p></div><div class="lineup-team"><h3>Team A</h3><div id="lineupAOptions" class="lineup-options">Choose Team A first.</div></div><div class="lineup-team"><h3>Team B</h3><div id="lineupBOptions" class="lineup-options">Choose Team B first.</div></div></section><section id="lolSeriesForecast" class="card series-forecast" hidden></section>');
+  controls.insertAdjacentHTML("afterend", '<section class="card expected-lineups"><div><h2>Expected lineup confirmation <small>(optional)</small></h2><p>Select exactly five expected starters for both teams to include their recent combined form. Incomplete lineups only reduce confidence.</p></div><div class="lineup-team"><h3>Team A</h3><div id="lineupAOptions" class="lineup-options">Choose Team A first.</div></div><div class="lineup-team"><h3>Team B</h3><div id="lineupBOptions" class="lineup-options">Choose Team B first.</div></div></section><section id="lolSeriesForecast" class="card series-forecast" hidden></section>');
 
   const selected = { A: new Set(), B: new Set() };
   const renderLineup = (side, players) => {
@@ -55,7 +55,7 @@
         if (!panel) return;
         const outcomes = (data.seriesOutcomes || []).map((item) => `<li><b>${data.teamA} ${item.scoreA}–${item.scoreB} ${data.teamB}</b><span>${(item.probability * 100).toFixed(1)}%</span></li>`).join("");
         const line = data.lineup || {};
-        const status = (team) => team?.expected?.length ? `${team.confirmed ? "Confirmed" : "Changed / incomplete"}: ${team.matched?.length || 0}/5 expected players match the rolling roster.` : "Using the latest recorded five-player roster.";
+        const status = (team) => team?.expected?.length ? `${team.confirmed ? "Confirmed — starting-five form included" : "Changed / incomplete"}: ${team.matched?.length || 0}/5 expected players match the rolling roster.` : "Using the latest recorded five-player roster.";
         panel.innerHTML = data.bestOf === 1 ? `<h2>Single-map prediction</h2><p>Bo1 selected — the win probability above is the map prediction.</p><p><b>Lineup:</b> ${status(line.teamA)} ${status(line.teamB)}</p>` : `<h2>Bo${data.bestOf} series forecast</h2><p><strong>${data.teamA}: ${(data.seriesProbabilityA * 100).toFixed(1)}%</strong> to win the series · <strong>${data.teamB}: ${(data.seriesProbabilityB * 100).toFixed(1)}%</strong></p><h3>Likely map scores</h3><ul>${outcomes}</ul><p><b>Lineup:</b> ${status(line.teamA)} ${status(line.teamB)}</p>`;
         panel.hidden = false;
       } catch { /* The normal comparison error is already displayed by the main view. */ }

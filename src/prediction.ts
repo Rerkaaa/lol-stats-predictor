@@ -22,6 +22,7 @@ export type TeamGame = {
 
 export type RosterPlayer = { name: string; role: string | null; games: number };
 export type PlayerGame = {
+  playerName: string;
   playedAt: string | null;
   patch: string | null;
   won: number;
@@ -52,6 +53,8 @@ export type TeamProfile = {
   cs15: number | null;
   kda: number | null;
   rosterKda: number | null;
+  lineupWinRate: number | null;
+  confirmedLineup: boolean;
   patchPlayerWinRate: number | null;
   firstBlood: number | null;
   firstTower: number | null;
@@ -130,6 +133,7 @@ export function profileTeam(
   roster: RosterPlayer[],
   playerGames: PlayerGame[],
   currentPatch: string | null,
+  confirmedLineup = false,
   now = new Date(),
 ): TeamProfile {
   const rosterSize = roster.length;
@@ -144,6 +148,7 @@ export function profileTeam(
     const kills = number(game.kills), assists = number(game.assists), deaths = number(game.deaths);
     return [kills === null || assists === null || deaths === null || deaths === 0 ? null : (kills + assists) / deaths, playerWeight(game)];
   }));
+  const lineupWinRate = weightedAverage(playerGames.map((game) => [number(game.won), playerWeight(game)]));
   const patchPlayerWinRate = weightedAverage(currentPlayers.map((game) => [number(game.won), playerWeight(game)]));
   const sideRates = ["blue", "red"].map((side) => weightedAverage(weighted.filter(([game]) => game.side === side).map(([game, weight]) => [game.won, weight])));
   const continuity = weightedAverage(weighted.map(([game, weight]) => [rosterSize ? Math.min(1, game.rosterOverlap / rosterSize) : null, weight]));
@@ -159,7 +164,7 @@ export function profileTeam(
     recentWinRate: recent.length ? recent.reduce((sum, game) => sum + game.won, 0) / recent.length : null,
     gd15: value((game) => game.goldDiff15), xp15: value((game) => game.xpDiff15), cs15: value((game) => game.csDiff15),
     kda: value((game) => game.deaths === null || game.deaths === 0 || game.kills === null || game.assists === null ? null : (game.kills + game.assists) / game.deaths),
-    rosterKda: playerKda, patchPlayerWinRate, firstBlood: value((game) => game.firstBlood), firstTower: value((game) => game.firstTower),
+    rosterKda: playerKda, lineupWinRate, confirmedLineup, patchPlayerWinRate, firstBlood: value((game) => game.firstBlood), firstTower: value((game) => game.firstTower),
     dragons: value((game) => game.dragons), barons: value((game) => game.barons), vision: value((game) => game.vision),
     sideWinRate: sideRates[0] === null || sideRates[1] === null ? null : (sideRates[0] + sideRates[1]) / 2,
     rosterContinuity: continuity,
@@ -228,6 +233,7 @@ export function predictTimeAware(left: TeamProfile, right: TeamProfile, killsLin
     { name: "CS diff @15", edge: scaledEdge(left.cs15, right.cs15, 20), weight: 0.05 },
     { name: "Current-roster continuity", edge: scaledEdge(left.rosterContinuity, right.rosterContinuity, 0.45), weight: 0.08 },
     { name: "Current-roster KDA", edge: scaledEdge(left.rosterKda, right.rosterKda, 1.5), weight: 0.08 },
+    ...(left.confirmedLineup && right.confirmedLineup ? [{ name: "Confirmed starting-five form", edge: scaledEdge(left.lineupWinRate, right.lineupWinRate, 0.25), weight: 0.02 }] : []),
     { name: "Current-patch player form", edge: scaledEdge(left.patchPlayerWinRate, right.patchPlayerWinRate, 0.25), weight: 0.08 },
     { name: "First blood", edge: scaledEdge(left.firstBlood, right.firstBlood, 0.2), weight: 0.04 },
     { name: "First tower", edge: scaledEdge(left.firstTower, right.firstTower, 0.2), weight: 0.04 },
