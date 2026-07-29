@@ -36,6 +36,7 @@ export type TeamProfile = {
   games: number;
   effectiveGames: number;
   recentGames: number;
+  recentWins: number;
   currentPatch: string | null;
   lastGameAt: string | null;
   roster: RosterPlayer[];
@@ -135,7 +136,7 @@ export function profileTeam(
   const durationDistribution = weightedDistribution(weighted.map(([game, weight]) => [game.durationSeconds === null ? null : game.durationSeconds / 60, weight]));
 
   return {
-    id, name, games: games.length, effectiveGames, recentGames: recent.length, currentPatch, lastGameAt, roster,
+    id, name, games: games.length, effectiveGames, recentGames: recent.length, recentWins: recent.reduce((sum, game) => sum + game.won, 0), currentPatch, lastGameAt, roster,
     rosterGames: playerGames.length, patchPlayerGames: currentPlayers.length,
     winRate: value((game) => game.won),
     recentWinRate: recent.length ? recent.reduce((sum, game) => sum + game.won, 0) / recent.length : null,
