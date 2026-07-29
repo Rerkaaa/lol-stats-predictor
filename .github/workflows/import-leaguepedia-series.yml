@@ -1,0 +1,40 @@
+name: Sync Leaguepedia series metadata
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: leaguepedia-series-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Import 2025 series metadata
+        env:
+          ORACLE_IMPORT_URL: ${{ secrets.ORACLE_IMPORT_URL }}
+          ORACLE_IMPORT_TOKEN: ${{ secrets.ORACLE_IMPORT_TOKEN }}
+        run: node scripts/import-leaguepedia-series.mjs 2025
+      - name: Pause between years
+        run: sleep 20
+      - name: Import 2026 series metadata
+        env:
+          ORACLE_IMPORT_URL: ${{ secrets.ORACLE_IMPORT_URL }}
+          ORACLE_IMPORT_TOKEN: ${{ secrets.ORACLE_IMPORT_TOKEN }}
+        run: node scripts/import-leaguepedia-series.mjs 2026

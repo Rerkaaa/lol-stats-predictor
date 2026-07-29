@@ -38,6 +38,7 @@ type GamesBody = StartImportBody & { games?: OracleGamePayload[] };
 type ValorantPlayerPayload = { name: string; agent?: string; rating?: number; acs?: number; adr?: number; kills?: number; deaths?: number; assists?: number; headshotPercent?: number; firstKills?: number; firstDeaths?: number };
 type ValorantMapPayload = { number: number; name: string; durationSeconds?: number; teamAScore?: number; teamBScore?: number; winner?: "A" | "B"; players?: Array<ValorantPlayerPayload & { team: "A" | "B" }> };
 type ValorantSeriesPayload = { id: string; url?: string; event?: string; tier?: string; playedAt: string; bestOf?: number; patch?: string; teamA: string; teamB: string; teamAScore?: number; teamBScore?: number; winner?: "A" | "B"; maps: ValorantMapPayload[] };
+type LeaguepediaSeriesGamePayload = { gameId?: string; matchId?: string; gameNumber?: number | null; playedAt?: string | null; competition?: string | null; teamA?: string | null; teamB?: string | null; winner?: string | null; patch?: string | null };
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
@@ -48,6 +49,22 @@ const validStart = (body: StartImportBody) => Number.isInteger(body.year) && (bo
 
 const authorized = (request: Request, env: Env) =>
   !!env.IMPORT_TOKEN && request.headers.get("authorization") === `Bearer ${env.IMPORT_TOKEN}`;
+
+async function handleLeaguepediaSeriesAdmin(request: Request, env: Env) {
+  if (!authorized(request, env)) return json({ error: "Unauthorized" }, 401);
+  if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
+  const body = await request.json<{ games?: LeaguepediaSeriesGamePayload[] }>();
+  const games = body.games;
+  if (!Array.isArray(games) || games.length < 1 || games.length > 100 || !games.every((game) => typeof game.gameId === "string" && game.gameId.length < 200 && typeof game.matchId === "string" && game.matchId.length < 200)) {
+    return json({ error: "Expected 1-100 Leaguepedia series-game records." }, 400);
+  }
+  await env.DB.batch(games.map((game) => env.DB.prepare(
+    `INSERT INTO leaguepedia_series_games(game_id,match_id,game_number,played_at,competition,team_a,team_b,winner,patch)
+     VALUES(?,?,?,?,?,?,?,?,?)
+     ON CONFLICT(game_id) DO UPDATE SET match_id=excluded.match_id,game_number=excluded.game_number,played_at=excluded.played_at,competition=excluded.competition,team_a=excluded.team_a,team_b=excluded.team_b,winner=excluded.winner,patch=excluded.patch,imported_at=CURRENT_TIMESTAMP`,
+  ).bind(game.gameId, game.matchId, Number.isInteger(game.gameNumber) ? game.gameNumber : null, game.playedAt ?? null, game.competition ?? null, game.teamA ?? null, game.teamB ?? null, game.winner ?? null, game.patch ?? null)));
+  return json({ imported: games.length });
+}
 
 const riotRouting = {
   BR1: ["br1", "americas"], LA1: ["la1", "americas"], LA2: ["la2", "americas"], NA1: ["na1", "americas"],
@@ -694,6 +711,7 @@ export default {
   async fetch(request: Request, env: Env) {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/api/admin/oracle/")) return handleOracleAdmin(request, env, url.pathname);
+    if (url.pathname === "/api/admin/leaguepedia/series-games") return handleLeaguepediaSeriesAdmin(request, env);
     if (url.pathname === "/api/admin/valorant/series") return handleValorantAdmin(request, env);
     if (url.pathname === "/api/health") return json({ ok: true, source: "Oracle's Elixir", coverage: "2022+" });
     if (url.pathname === "/api/summoner") return summonerLookup(request, env, url);
