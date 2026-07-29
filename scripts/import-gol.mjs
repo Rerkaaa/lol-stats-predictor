@@ -144,8 +144,12 @@ if (dryRun) process.exit(0);
 const sourceHash = sha256(JSON.stringify(games.map(({ gameId, sourceHash: gameHash }) => [gameId, gameHash])));
 const sourceUrl = "https://gol.gg/esports/home/";
 await post("/api/admin/oracle/start", { year: new Date().getUTCFullYear(), sourceUrl, sourceHash });
-const changed = await post("/api/admin/oracle/changed-games", { year: new Date().getUTCFullYear(), sourceUrl, sourceHash, games: games.map(({ gameId, sourceHash: gameHash }) => ({ gameId, sourceHash: gameHash })) });
-const changedIds = new Set(changed.changedGameIds ?? []);
+const changedIds = new Set();
+for (let index = 0; index < games.length; index += 80) {
+  const batch = games.slice(index, index + 80).map(({ gameId, sourceHash: gameHash }) => ({ gameId, sourceHash: gameHash }));
+  const changed = await post("/api/admin/oracle/changed-games", { year: new Date().getUTCFullYear(), sourceUrl, sourceHash, games: batch });
+  for (const gameId of changed.changedGameIds ?? []) changedIds.add(gameId);
+}
 let accepted = 0, skipped = games.length - changedIds.size, rejected = 0;
 for (const game of games.filter((item) => changedIds.has(item.gameId))) {
   const result = await post("/api/admin/oracle/games", { year: new Date().getUTCFullYear(), sourceUrl: game.url, sourceHash, games: [game] });
