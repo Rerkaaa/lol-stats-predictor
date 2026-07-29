@@ -272,7 +272,7 @@ async function teamProfile(db: D1Database, id: number, patch: string | null, ref
   const roster: RosterPlayer[] = rosterRows.map((row) => ({ name: row.name, role: row.role, games: Number(row.games) }));
   const { results: gameRows = [] } = await db
     .prepare(
-      `SELECT s.match_id matchId,m.played_at playedAt,m.patch,s.side,s.won,s.kills,s.deaths,s.assists,
+      `SELECT s.match_id matchId,m.played_at playedAt,m.stage,m.patch,s.side,s.won,s.kills,s.deaths,s.assists,
         m.duration_seconds durationSeconds,s.gold_diff_15 goldDiff15,s.xp_diff_15 xpDiff15,s.cs_diff_15 csDiff15,s.first_blood firstBlood,
         s.first_tower firstTower,s.dragons,s.barons,s.vision_score_per_minute vision
        FROM team_game_stats s JOIN matches m ON m.id=s.match_id WHERE s.team_id=? AND m.source_game_id LIKE 'oracle:%' AND m.played_at>='2022-01-01' ORDER BY m.played_at DESC`,

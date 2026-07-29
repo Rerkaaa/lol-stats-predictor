@@ -29,6 +29,16 @@ def edge(left, right, scale):
     return max(-1, min(1, (left - right) / scale))
 
 
+strength_mode = os.environ.get("TOURNAMENT_STRENGTH", "off")
+
+
+def tournament_strength(stage):
+    name = (stage or "").upper()
+    base = 1.08 if any(token in name for token in ("WORLDS", "MSI", "MID-SEASON", "EWC", "ESPORTS WORLD CUP")) else 0.92 if any(token in name for token in ("LCKC", "NACL", "ACADEMY", "CHALLENGERS", "LRS", "LIT")) else 1.0 if any(token in name for token in ("LCK", "LPL", "LEC", "LTA", "LCS", "LCP", "PCS", "CBLOL", "VCS", "LJL", "TCL", "LAS", "LLA")) else 0.96
+    blend = {"off": 0, "light": .15, "soft": .5, "full": 1}.get(strength_mode, 0)
+    return 1 + (base - 1) * blend
+
+
 def profile(games, lineup, patch, now):
     # Older games have a tiny live-model weight; cap retained history so the
     # replay remains practical while preserving the meaningful recent sample.
@@ -41,7 +51,7 @@ def profile(games, lineup, patch, now):
         patch_weight = 1 if patch and game["patch"] == patch else 0.7 if age <= 45 else 0.35 if age <= 120 else 0.15
         overlap = len(lineup & game["players"])
         continuity = 0.35 + 0.65 * min(1, overlap / roster_size) if roster_size else 0.7
-        rows.append((game, recency * patch_weight * continuity, age))
+        rows.append((game, recency * patch_weight * continuity * tournament_strength(game.get("stage")), age))
 
     def metric(key):
         return weighted([(game[key], weight) for game, weight, _ in rows])
@@ -102,7 +112,7 @@ if not database_exists:
         db.executescript(source.read())
 db.row_factory = sqlite3.Row
 game_rows = db.execute("""
-  SELECT m.id,m.played_at,m.patch,s.team_id,s.side,s.won,s.kills,s.deaths,s.assists,
+  SELECT m.id,m.played_at,m.stage,m.patch,s.team_id,s.side,s.won,s.kills,s.deaths,s.assists,
     s.gold_diff_15 gd,s.xp_diff_15 xp,s.cs_diff_15 cs,s.first_blood fb,s.first_tower ft,
     s.dragons,s.barons,s.vision_score_per_minute vision
   FROM matches m JOIN team_game_stats s ON s.match_id=m.id

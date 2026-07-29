@@ -1,6 +1,7 @@
 export type TeamGame = {
   matchId: number;
   playedAt: string | null;
+  stage: string | null;
   patch: string | null;
   side: string;
   won: number;
@@ -105,7 +106,19 @@ function gameWeight(game: TeamGame, currentPatch: string | null, rosterSize: num
   const recency = Math.max(0.08, 0.5 ** (age / 60));
   const patch = currentPatch && game.patch === currentPatch ? 1 : age <= 45 ? 0.7 : age <= 120 ? 0.35 : 0.15;
   const continuity = rosterSize ? 0.35 + 0.65 * Math.min(1, game.rosterOverlap / rosterSize) : 0.7;
-  return recency * patch * continuity;
+  // The replay retained only a light adjustment: stronger events should inform
+  // form, but never overpower team-specific recency and roster evidence.
+  return recency * patch * continuity * (1 + (tournamentStrength(game.stage) - 1) * 0.15);
+}
+
+// Tournament strength controls how much a past map contributes to current form.
+// It does not award a team an automatic advantage merely for competing in a league.
+function tournamentStrength(stage: string | null) {
+  const name = (stage ?? "").toUpperCase();
+  if (/(WORLDS|MSI|MID.?SEASON|EWC|ESPORTS WORLD CUP)/.test(name)) return 1.08;
+  if (/(LCKC|NACL|ACADEMY|CHALLENGERS|LRS|LIT)/.test(name)) return 0.92;
+  if (/(LCK|LPL|LEC|LTA|LCS|LCP|PCS|CBLOL|VCS|LJL|TCL|LAS|LLA)/.test(name)) return 1;
+  return 0.96;
 }
 
 export function profileTeam(
