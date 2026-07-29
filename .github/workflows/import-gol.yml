@@ -8,8 +8,8 @@ on:
         required: false
         type: string
   schedule:
-    # Redundant UTC triggers; only the Europe/Tirane midnight run imports.
-    - cron: "1,31 22,23 * * *"
+    # The importer only fetches map pages that are not already stored.
+    - cron: "*/30 * * * *"
 
 permissions:
   contents: read
@@ -40,10 +40,6 @@ jobs:
           ORACLE_IMPORT_URL: ${{ secrets.ORACLE_IMPORT_URL }}
           ORACLE_IMPORT_TOKEN: ${{ secrets.ORACLE_IMPORT_TOKEN }}
         run: |
-          if [[ "$EVENT_NAME" == "schedule" ]] && ! node scripts/is-tirane-midnight.mjs; then
-            echo "Not the Europe/Tirane midnight run; nothing to do."
-            exit 0
-          fi
           if [[ -n "$INPUT_MAX_GAMES" ]]; then
             export GOL_MAX_GAMES="$INPUT_MAX_GAMES"
           elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then

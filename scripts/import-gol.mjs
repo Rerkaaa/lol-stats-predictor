@@ -124,13 +124,21 @@ for (let start = 0; candidates.length < maxGames && start < 1000; start += 10) {
   const body = await get("https://gol.gg/esports/ajax.home.php", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: `start=${start}` });
   const ids = latestGames(body);
   if (!ids.length) break;
-  for (const game of ids) if ((!latestImported || game.date > latestImported) && !candidates.some((item) => item.id === game.id) && candidates.length < maxGames) candidates.push(game);
-  if (latestImported && ids.every((game) => game.date <= latestImported)) break;
+  for (const game of ids) if ((!latestImported || game.date >= latestImported) && !candidates.some((item) => item.id === game.id) && candidates.length < maxGames) candidates.push(game);
+  if (latestImported && ids.every((game) => game.date < latestImported)) break;
   await delay(250);
 }
 
+const knownIds = new Set();
+if (!dryRun) {
+  for (let index = 0; index < candidates.length; index += 80) {
+    const known = await post("/api/admin/oracle/known-games", { games: candidates.slice(index, index + 80).map((game) => `gol:${game.id}`) });
+    for (const gameId of known.knownGameIds ?? []) knownIds.add(gameId);
+  }
+}
+
 const games = [];
-for (const candidate of candidates) {
+for (const candidate of candidates.filter((game) => !knownIds.has(`gol:${game.id}`))) {
   const url = `https://gol.gg/game/stats/${candidate.id}/page-game/`;
   const html = await get(url);
   const rows = toRows(candidate.id, html, candidate);

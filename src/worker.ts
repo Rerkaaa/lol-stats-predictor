@@ -395,6 +395,17 @@ async function handleOracleAdmin(request: Request, env: Env, pathname: string) {
   if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
   const body = await request.json() as StartImportBody & ChangedGamesBody & GamesBody;
+  if (pathname === "/api/admin/oracle/known-games") {
+    const supplied = (body as { games?: unknown[] }).games;
+    if (!Array.isArray(supplied) || supplied.length < 1 || supplied.length > 80 || !supplied.every((game) => typeof game === "string" && game.length > 0 && game.length < 100)) {
+      return json({ error: "Expected 1-80 game IDs." }, 400);
+    }
+    const { results = [] } = await env.DB
+      .prepare(`SELECT source_game_id sourceGameId FROM matches WHERE source_game_id IN (${supplied.map(() => "?").join(",")})`)
+      .bind(...supplied.map((game) => `oracle:${game}`))
+      .all<{ sourceGameId: string }>();
+    return json({ knownGameIds: results.map((row) => row.sourceGameId.replace(/^oracle:/, "")) });
+  }
   if (!validStart(body)) return json({ error: "Expected a 2020+ year, source URL, and SHA-256 source hash." }, 400);
   const start = { year: body.year as number, sourceUrl: body.sourceUrl as string, sourceHash: body.sourceHash as string };
 
@@ -641,6 +652,24 @@ async function latestValorantSeries(db: D1Database) {
   return series.map((row: any) => ({ ...row, maps: mapsBySeries.get(row.id) ?? [] }));
 }
 
+async function valorantHeadToHeadSeries(db: D1Database, teamA: number, teamB: number) {
+  const { results: series = [] } = await db.prepare(
+    `SELECT s.id,s.played_at playedAt,s.event_name event,s.best_of bestOf,s.team_a_score teamAScore,s.team_b_score teamBScore,a.name teamA,b.name teamB,w.name winner
+     FROM valorant_series s JOIN valorant_teams a ON a.id=s.team_a_id JOIN valorant_teams b ON b.id=s.team_b_id LEFT JOIN valorant_teams w ON w.id=s.winner_team_id
+     WHERE (s.team_a_id=? AND s.team_b_id=?) OR (s.team_a_id=? AND s.team_b_id=?) ORDER BY s.played_at DESC LIMIT 30`,
+  ).bind(teamA, teamB, teamB, teamA).all<any>();
+  if (!series.length) return [];
+  const ids = series.map((row: any) => row.id);
+  const { results: maps = [] } = await db.prepare(
+    `SELECT m.series_id seriesId,m.map_number number,m.map_name name,m.team_a_score teamAScore,m.team_b_score teamBScore,a.name teamA,b.name teamB,w.name winner
+     FROM valorant_maps m JOIN valorant_series s ON s.id=m.series_id JOIN valorant_teams a ON a.id=s.team_a_id JOIN valorant_teams b ON b.id=s.team_b_id LEFT JOIN valorant_teams w ON w.id=m.winner_team_id
+     WHERE m.series_id IN (${ids.map(() => "?").join(",")}) ORDER BY m.series_id,m.map_number`,
+  ).bind(...ids).all<any>();
+  const mapsBySeries = new Map<number, any[]>();
+  for (const map of maps) mapsBySeries.set(map.seriesId, [...(mapsBySeries.get(map.seriesId) ?? []), map]);
+  return series.map((row: any) => ({ ...row, maps: mapsBySeries.get(row.id) ?? [] }));
+}
+
 export default {
   async fetch(request: Request, env: Env) {
     const url = new URL(request.url);
@@ -672,6 +701,11 @@ export default {
       return json(results);
     }
     if (url.pathname === "/api/valorant/latest-series") return json(await latestValorantSeries(env.DB));
+    if (url.pathname === "/api/valorant/match-history") {
+      const teamA = Number(url.searchParams.get("teamA")), teamB = Number(url.searchParams.get("teamB"));
+      if (!Number.isInteger(teamA) || !Number.isInteger(teamB) || teamA === teamB) return json({ error: "Select two distinct Valorant teams." }, 400);
+      return json(await valorantHeadToHeadSeries(env.DB, teamA, teamB));
+    }
     if (url.pathname === "/api/valorant/map-pool") {
       const leftId = Number(url.searchParams.get("teamA")), rightId = Number(url.searchParams.get("teamB"));
       if (!Number.isInteger(leftId) || !Number.isInteger(rightId) || leftId === rightId) return json({ error: "Select two distinct Valorant teams." }, 400);
