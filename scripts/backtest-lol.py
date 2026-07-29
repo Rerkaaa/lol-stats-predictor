@@ -116,7 +116,7 @@ game_rows = db.execute("""
     s.gold_diff_15 gd,s.xp_diff_15 xp,s.cs_diff_15 cs,s.first_blood fb,s.first_tower ft,
     s.dragons,s.barons,s.vision_score_per_minute vision
   FROM matches m JOIN team_game_stats s ON s.match_id=m.id
-  WHERE m.id IN (SELECT id FROM matches WHERE source_game_id LIKE 'oracle:%' AND played_at>='2022-01-01' ORDER BY played_at DESC,id DESC LIMIT 1600)
+  WHERE m.id IN (SELECT id FROM matches WHERE source_game_id LIKE 'oracle:%' AND played_at>='2022-01-01' ORDER BY played_at DESC,id DESC LIMIT 10000)
   ORDER BY m.played_at,m.id
 """).fetchall()
 players = defaultdict(list)
@@ -124,7 +124,7 @@ for row in db.execute("""
   SELECT p.match_id,p.team_id,p.player_name,p.kills,p.deaths,p.assists,m.played_at,m.patch,s.won
   FROM player_game_stats p JOIN matches m ON m.id=p.match_id
   JOIN team_game_stats s ON s.match_id=p.match_id AND s.team_id=p.team_id
-  WHERE m.id IN (SELECT id FROM matches WHERE source_game_id LIKE 'oracle:%' AND played_at>='2022-01-01' ORDER BY played_at DESC,id DESC LIMIT 1600)
+  WHERE m.id IN (SELECT id FROM matches WHERE source_game_id LIKE 'oracle:%' AND played_at>='2022-01-01' ORDER BY played_at DESC,id DESC LIMIT 10000)
 """):
     players[(row["match_id"], row["team_id"])].append(dict(name=row["player_name"], kills=row["kills"], deaths=row["deaths"], assists=row["assists"], date=parse_date(row["played_at"]), patch=row["patch"], won=row["won"]))
 
@@ -189,7 +189,8 @@ for _, teams in sorted(matches.items(), key=lambda item: item[1][0]["date"]):
     if len(history[right_game["team_id"]]) > 120:
         history[right_game["team_id"]].pop(0)
 
-sample = predictions[-200:]
+requested_sample = os.environ.get("BACKTEST_SAMPLE", "200")
+sample = predictions if requested_sample == "all" else predictions[-max(1, int(requested_sample)):]
 accuracy = sum((chance >= .5) == bool(won) for chance, _, won, _ in sample) / len(sample)
 brier = sum((chance - won) ** 2 for chance, _, won, _ in sample) / len(sample)
 mae = sum(abs(chance - won) for chance, _, won, _ in sample) / len(sample)

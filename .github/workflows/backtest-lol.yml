@@ -1,0 +1,47 @@
+name: Full LoL model backtest
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-lol-backtest
+  cancel-in-progress: false
+
+jobs:
+  replay:
+    name: Replay all available LoL maps
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pnpm install --frozen-lockfile
+      - name: Export the live D1 data
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: pnpm exec wrangler d1 export lol-stats-db --remote --output /tmp/lol-backtest.sql
+      - name: Replay every eligible historical map
+        env:
+          BACKTEST_SAMPLE: all
+          TOURNAMENT_STRENGTH: light
+        run: python scripts/backtest-lol.py /tmp/lol-backtest.sql
+      - name: Publish replay result in the log
+        run: cat /tmp/lol-backtest.sql.sqlite.result.json
+      - name: Save replay result
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-lol-backtest-result
+          path: /tmp/lol-backtest.sql.sqlite.result.json
+          if-no-files-found: error
