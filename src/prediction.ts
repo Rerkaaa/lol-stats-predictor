@@ -43,6 +43,8 @@ export type TeamProfile = {
   roster: RosterPlayer[];
   rosterGames: number;
   patchPlayerGames: number;
+  patchChampionCount: number;
+  patchReadiness: number;
   winRate: number | null;
   recentWinRate: number | null;
   gd15: number | null;
@@ -135,6 +137,8 @@ export function profileTeam(
   const value = (selector: (game: TeamGame) => number | null) => weightedAverage(weighted.map(([game, weight]) => [selector(game), weight]));
   const recent = games.filter((game) => daysSince(game.playedAt, now) <= 45);
   const currentPlayers = playerGames.filter((game) => currentPatch && game.patch === currentPatch);
+  const patchChampionCount = new Set(currentPlayers.map((game) => game.champion).filter((champion): champion is string => !!champion)).size;
+  const patchReadiness = Math.min(1, (currentPlayers.length / 30) * .70 + (patchChampionCount / 12) * .30);
   const playerWeight = (game: PlayerGame) => Math.max(0.1, 0.5 ** (daysSince(game.playedAt, now) / 45));
   const playerKda = weightedAverage(playerGames.map((game) => {
     const kills = number(game.kills), assists = number(game.assists), deaths = number(game.deaths);
@@ -150,7 +154,7 @@ export function profileTeam(
 
   return {
     id, name, games: games.length, effectiveGames, recentGames: recent.length, recentWins: recent.reduce((sum, game) => sum + game.won, 0), currentPatch, lastGameAt, roster,
-    rosterGames: playerGames.length, patchPlayerGames: currentPlayers.length,
+    rosterGames: playerGames.length, patchPlayerGames: currentPlayers.length, patchChampionCount, patchReadiness,
     winRate: value((game) => game.won),
     recentWinRate: recent.length ? recent.reduce((sum, game) => sum + game.won, 0) / recent.length : null,
     gd15: value((game) => game.goldDiff15), xp15: value((game) => game.xpDiff15), cs15: value((game) => game.csDiff15),

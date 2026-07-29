@@ -794,8 +794,8 @@ export default {
         currentPatch: patch,
         elo: { teamA: Math.round(elo.leftRating), teamB: Math.round(elo.rightRating), probabilityA: elo.probabilityA },
         asOf: latest?.playedAt ?? [left.lastGameAt, right.lastGameAt].filter((date): date is string => !!date).sort().at(-1) ?? null,
-        teamAContext: { games: left.games, effectiveGames: left.effectiveGames, recentGames: left.recentGames, recentWins: left.recentWins, roster: left.roster, patchPlayerGames: left.patchPlayerGames },
-        teamBContext: { games: right.games, effectiveGames: right.effectiveGames, recentGames: right.recentGames, recentWins: right.recentWins, roster: right.roster, patchPlayerGames: right.patchPlayerGames },
+        teamAContext: { games: left.games, effectiveGames: left.effectiveGames, recentGames: left.recentGames, recentWins: left.recentWins, roster: left.roster, patchPlayerGames: left.patchPlayerGames, patchChampionCount: left.patchChampionCount, patchReadiness: left.patchReadiness },
+        teamBContext: { games: right.games, effectiveGames: right.effectiveGames, recentGames: right.recentGames, recentWins: right.recentWins, roster: right.roster, patchPlayerGames: right.patchPlayerGames, patchChampionCount: right.patchChampionCount, patchReadiness: right.patchReadiness },
       });
     }
     return env.ASSETS.fetch(request);
