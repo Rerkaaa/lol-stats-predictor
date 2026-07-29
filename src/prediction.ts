@@ -162,6 +162,23 @@ function normalCdf(value: number) {
   return 0.5 * (1 + sign * erf);
 }
 
+function binomial(n: number, k: number) {
+  let value = 1;
+  for (let index = 1; index <= k; index += 1) value = value * (n - k + index) / index;
+  return value;
+}
+
+function seriesOutcomes(mapChance: number, bestOf: number) {
+  const mapsToWin = Math.floor(bestOf / 2) + 1;
+  const outcomes: Array<{ scoreA: number; scoreB: number; probability: number }> = [];
+  for (let losses = 0; losses < mapsToWin; losses += 1) {
+    const probability = binomial(mapsToWin - 1 + losses, losses) * mapChance ** mapsToWin * (1 - mapChance) ** losses;
+    outcomes.push({ scoreA: mapsToWin, scoreB: losses, probability });
+    outcomes.push({ scoreA: losses, scoreB: mapsToWin, probability: binomial(mapsToWin - 1 + losses, losses) * (1 - mapChance) ** mapsToWin * mapChance ** losses });
+  }
+  return outcomes.sort((left, right) => right.probability - left.probability);
+}
+
 function mapForecast(
   leftMean: number | null,
   rightMean: number | null,
@@ -184,7 +201,7 @@ function mapForecast(
   };
 }
 
-export function predictTimeAware(left: TeamProfile, right: TeamProfile, killsLine: number | null = null, durationLine: number | null = null, elo: EloSignal | null = null) {
+export function predictTimeAware(left: TeamProfile, right: TeamProfile, killsLine: number | null = null, durationLine: number | null = null, elo: EloSignal | null = null, bestOf = 1) {
   const baseFactors: PredictionFactor[] = [
     { name: "Recency-weighted win rate", edge: scaledEdge(left.winRate, right.winRate, 0.2), weight: 0.18 },
     { name: "Recent 45-day form", edge: scaledEdge(left.recentWinRate, right.recentWinRate, 0.25), weight: 0.12 },
@@ -215,9 +232,10 @@ export function predictTimeAware(left: TeamProfile, right: TeamProfile, killsLin
   // share for current form, roster, and early-game statistics.
   const eloBlend = elo ? 0.4 : 0;
   const probabilityA = modelProbabilityA * (1 - eloBlend) + (elo?.probabilityA ?? 0.5) * eloBlend;
+  const seriesProbabilityA = seriesOutcomes(probabilityA, bestOf).filter((outcome) => outcome.scoreA > outcome.scoreB).reduce((sum, outcome) => sum + outcome.probability, 0);
   const factors = [...baseFactors.map((factor) => ({ ...factor, weight: factor.weight * (1 - eloBlend) })), ...(elo ? [{ name: "Opponent-adjusted Elo", edge: scaledEdge(elo.leftRating, elo.rightRating, 200), weight: eloBlend }] : [])];
   return {
-    probabilityA, probabilityB: 1 - probabilityA, factors, activeWeight: activeWeight * (1 - eloBlend) + eloBlend, confidence,
+    probabilityA, probabilityB: 1 - probabilityA, seriesProbabilityA, seriesProbabilityB: 1 - seriesProbabilityA, bestOf, seriesOutcomes: seriesOutcomes(probabilityA, bestOf), factors, activeWeight: activeWeight * (1 - eloBlend) + eloBlend, confidence,
     mapForecasts: {
       totalKills: mapForecast(left.totalKills, right.totalKills, left.totalKillsDeviation, right.totalKillsDeviation, killsLine, 4),
       duration: mapForecast(left.durationMinutes, right.durationMinutes, left.durationDeviation, right.durationDeviation, durationLine, 3),

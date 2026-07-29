@@ -299,6 +299,24 @@ async function teamProfile(db: D1Database, id: number, patch: string | null, ref
   return profileTeam(team.id, team.name, games, roster, playerGames, patch, referenceDate);
 }
 
+async function teamRoster(db: D1Database, id: number) {
+  const { results = [] } = await db.prepare(
+    `SELECT p.player_name name,MAX(p.role) role,COUNT(*) games
+     FROM player_game_stats p JOIN matches m ON m.id=p.match_id
+     WHERE p.team_id=? AND m.source_game_id LIKE 'oracle:%' AND m.played_at>='2022-01-01'
+     GROUP BY p.player_name ORDER BY MAX(m.played_at) DESC,COUNT(*) DESC LIMIT 8`,
+  ).bind(id).all<RosterDbRow>();
+  return results.map((row) => ({ name: row.name, role: row.role, games: Number(row.games) }));
+}
+
+const parseLineup = (value: string | null) => [...new Set((value ?? "").split(",").map((name) => name.trim()).filter(Boolean))].slice(0, 5);
+const lineupConfirmation = (profile: Awaited<ReturnType<typeof teamProfile>>, expected: string[]) => {
+  const active = profile?.roster.map((player) => player.name) ?? [];
+  const activeKeys = new Set(active.map((name) => name.toLocaleLowerCase()));
+  const matched = expected.filter((name) => activeKeys.has(name.toLocaleLowerCase()));
+  return { active, expected, matched, confirmed: expected.length === 5 && matched.length === 5 };
+};
+
 type SeriesFilter = { teamId?: number; opponentId?: number };
 
 async function latestSeries(db: D1Database, filter: SeriesFilter = {}) {
@@ -690,6 +708,11 @@ export default {
         .all();
       return json(results);
     }
+    if (url.pathname === "/api/team-roster") {
+      const teamId = Number(url.searchParams.get("team"));
+      if (!Number.isInteger(teamId)) return json({ error: "Choose a team." }, 400);
+      return json(await teamRoster(env.DB, teamId));
+    }
     if (url.pathname === "/api/valorant/teams") {
       const { results = [] } = await env.DB.prepare(
         `SELECT t.id,t.name,COUNT(m.id) maps FROM valorant_teams t JOIN valorant_series s ON s.team_a_id=t.id OR s.team_b_id=t.id JOIN valorant_maps m ON m.series_id=s.id WHERE s.played_at>='2025-01-01' AND s.played_at<'2027-01-01' GROUP BY t.id,t.name HAVING maps>=3 ORDER BY t.name`,
@@ -749,16 +772,24 @@ export default {
       };
       const killsLine = requestedLine("killsLine", 1, 100);
       const durationLine = requestedLine("durationLine", 10, 90);
+      const requestedBestOf = Number(url.searchParams.get("bestOf"));
+      const bestOf = [1, 3, 5].includes(requestedBestOf) ? requestedBestOf : 1;
+      const expectedLineupA = parseLineup(url.searchParams.get("lineupA"));
+      const expectedLineupB = parseLineup(url.searchParams.get("lineupB"));
       const latest = await currentPatch(env.DB);
       const patch = latest?.patch ?? null;
       const referenceDate = latest?.playedAt ? new Date(`${latest.playedAt.replace(" ", "T")}Z`) : new Date();
       const [left, right, elo] = await Promise.all([teamProfile(env.DB, leftId, patch, referenceDate), teamProfile(env.DB, rightId, patch, referenceDate), lolEloSignal(env.DB, leftId, rightId)]);
       if (!left || !right) return json({ error: "Both teams need imported Oracle's Elixir statistics." }, 404);
-      const prediction = predictTimeAware(left, right, killsLine, durationLine, elo);
+      const prediction = predictTimeAware(left, right, killsLine, durationLine, elo, bestOf);
+      const lineupA = lineupConfirmation(left, expectedLineupA), lineupB = lineupConfirmation(right, expectedLineupB);
+      const lineupConfidence = [lineupA, lineupB].some((lineup) => lineup.expected.length) ? (lineupA.confirmed && lineupB.confirmed ? 1 : 0.85) : 1;
       return json({
         teamA: left.name,
         teamB: right.name,
         ...prediction,
+        confidence: prediction.confidence * lineupConfidence,
+        lineup: { teamA: lineupA, teamB: lineupB },
         model: "Time-aware roster and patch model",
         currentPatch: patch,
         elo: { teamA: Math.round(elo.leftRating), teamB: Math.round(elo.rightRating), probabilityA: elo.probabilityA },
