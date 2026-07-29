@@ -110,8 +110,34 @@ for row in db.execute("""
             "team_a_score": row["team_a_score"], "team_b_score": row["team_b_score"],
         })
 
+# Series-level Elo avoids leaking map-one results into the rating used for the
+# same series. It is the Valorant equivalent of opponent-adjusted form.
+ratings, last_seen, elo_before = defaultdict(lambda: 1500.0), {}, {}
+for series_id, entries in sorted(series.items(), key=lambda item: item[1][0]["date"]):
+    first_map = defaultdict(list)
+    for entry in entries:
+        first_map[entry["map_id"]].append(entry)
+    teams = next(iter(first_map.values()), [])
+    if len(teams) != 2:
+        continue
+    left, right = teams
+    for team_id in (left["team_id"], right["team_id"]):
+        if team_id in last_seen:
+            days = max(0, (left["date"] - last_seen[team_id]).total_seconds() / DAY)
+            ratings[team_id] = 1500 + (ratings[team_id] - 1500) * (.5 ** (days / 180))
+        last_seen[team_id] = left["date"]
+    left_rating, right_rating = ratings[left["team_id"]], ratings[right["team_id"]]
+    expected = 1 / (1 + 10 ** ((right_rating - left_rating) / 400))
+    elo_before[series_id] = expected
+    if left["series_winner"] is not None:
+        actual = int(left["series_winner"] == left["team_id"])
+        ratings[left["team_id"]] += 24 * (actual - expected)
+        ratings[right["team_id"]] += 24 * ((1 - actual) - (1 - expected))
+
 history = defaultdict(list)
 map_predictions, series_predictions = [], []
+elo_map_trials = {weight: [] for weight in (.1, .2, .3, .4, .5)}
+elo_series_trials = {weight: [] for weight in (.1, .2, .3, .4, .5)}
 for _, entries in sorted(series.items(), key=lambda item: item[1][0]["date"]):
     by_map = defaultdict(list)
     for entry in entries:
@@ -124,14 +150,20 @@ for _, entries in sorted(series.items(), key=lambda item: item[1][0]["date"]):
     if len(history[left["team_id"]]) >= 10 and len(history[right["team_id"]]) >= 10:
         chance = probability(profile(history[left["team_id"]], left["date"]), profile(history[right["team_id"]], right["date"]))
         if chance is not None:
+            elo_chance = elo_before.get(left["series_id"], .5)
             for teams in maps:
                 side = next((entry for entry in teams if entry["team_id"] == left["team_id"]), None)
                 if side:
                     map_predictions.append((chance, side["won"]))
+                    for weight in elo_map_trials:
+                        elo_map_trials[weight].append(((1 - weight) * chance + weight * elo_chance, side["won"]))
             high_score = max(left["team_a_score"] or 0, left["team_b_score"] or 0)
             best_of = 5 if high_score >= 3 else 3 if high_score >= 2 else 1
             if left["series_winner"] is not None:
                 series_predictions.append((series_chance(chance, best_of), int(left["series_winner"] == left["team_id"]), best_of))
+                for weight in elo_series_trials:
+                    blended = (1 - weight) * chance + weight * elo_chance
+                    elo_series_trials[weight].append((series_chance(blended, best_of), int(left["series_winner"] == left["team_id"]), best_of))
     for teams in maps:
         for entry in teams:
             history[entry["team_id"]].append(entry)
@@ -143,6 +175,7 @@ result = {
     "tested_maps": len(map_predictions), "map_winner_accuracy_percent": accuracy(map_predictions),
     "tested_series": len(series_predictions), "series_winner_accuracy_percent": accuracy(series_predictions),
     "series_by_format": {str(best_of): {"tested": sum(1 for _, _, fmt in series_predictions if fmt == best_of), "accuracy_percent": accuracy([row for row in series_predictions if row[2] == best_of])} for best_of in (1, 3, 5)},
+    "opponent_adjusted_elo_trials": {str(weight): {"map_accuracy_percent": accuracy(elo_map_trials[weight]), "series_accuracy_percent": accuracy(elo_series_trials[weight])} for weight in elo_map_trials},
 }
 print(result)
 with open(database_path + ".valorant-result.json", "w", encoding="utf-8") as output:
