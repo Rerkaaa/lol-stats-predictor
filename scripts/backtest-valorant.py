@@ -43,6 +43,7 @@ def profile(maps, now, confirmed_lineup=None):
     recent = [game for game in maps if (now - game["date"]).total_seconds() / DAY <= 35]
     lineup_adr = None
     lineup_kda = None
+    lineup_continuity = None
     if confirmed_lineup:
         selected = [
             (player, weight)
@@ -52,6 +53,8 @@ def profile(maps, now, confirmed_lineup=None):
         ]
         lineup_adr = average([(player["adr"], weight) for player, weight in selected])
         lineup_kda = average([((player["kills"] + player["assists"]) / max(1, player["deaths"]), weight) for player, weight in selected if player["kills"] is not None and player["deaths"] is not None and player["assists"] is not None])
+        recent_lineup_maps = maps[-8:]
+        lineup_continuity = sum(1 for game in recent_lineup_maps for player in game["players"] if player["name"] in confirmed_lineup) / (len(recent_lineup_maps) * 5) if recent_lineup_maps else None
     return {
         "win": metric("won"),
         "recent": sum(game["won"] for game in recent) / len(recent) if recent else None,
@@ -59,11 +62,12 @@ def profile(maps, now, confirmed_lineup=None):
         "adr": metric("adr"),
         "lineup_adr": lineup_adr,
         "lineup_kda": lineup_kda,
+        "lineup_continuity": lineup_continuity,
         "effective": sum(weight for _, weight in weighted),
     }
 
 
-def probability(left, right, lineup_weight=0, player_form_weight=0):
+def probability(left, right, lineup_weight=0, player_form_weight=0, continuity_weight=0):
     factors = [
         (edge(left["win"], right["win"], .20), .44),
         (edge(left["round"], right["round"], 4), .34),
@@ -74,6 +78,8 @@ def probability(left, right, lineup_weight=0, player_form_weight=0):
         factors.append((edge(left["lineup_adr"], right["lineup_adr"], 25), lineup_weight))
     if player_form_weight:
         factors.append((edge(left["lineup_kda"], right["lineup_kda"], .50), player_form_weight))
+    if continuity_weight:
+        factors.append((edge(left["lineup_continuity"], right["lineup_continuity"], .30), continuity_weight))
     available = [(value, weight) for value, weight in factors if value is not None]
     if not available:
         return None
@@ -161,6 +167,8 @@ lineup_map_trials = {weight: [] for weight in (.02, .04, .06, .08)}
 lineup_series_trials = {weight: [] for weight in (.02, .04, .06, .08)}
 player_form_map_trials = {weight: [] for weight in (.02, .04, .06)}
 player_form_series_trials = {weight: [] for weight in (.02, .04, .06)}
+continuity_map_trials = {weight: [] for weight in (.02, .04, .06)}
+continuity_series_trials = {weight: [] for weight in (.02, .04, .06)}
 for _, entries in sorted(series.items(), key=lambda item: item[1][0]["date"]):
     by_map = defaultdict(list)
     for entry in entries:
@@ -193,6 +201,10 @@ for _, entries in sorted(series.items(), key=lambda item: item[1][0]["date"]):
                         player_chance = probability(left_profile, right_profile, .04, weight)
                         if player_chance is not None:
                             player_form_map_trials[weight].append((.6 * player_chance + .4 * elo_chance, side["won"]))
+                    for weight in continuity_map_trials:
+                        continuity_chance = probability(left_profile, right_profile, .04, .06, weight)
+                        if continuity_chance is not None:
+                            continuity_map_trials[weight].append((.6 * continuity_chance + .4 * elo_chance, side["won"]))
             high_score = max(left["team_a_score"] or 0, left["team_b_score"] or 0)
             best_of = 5 if high_score >= 3 else 3 if high_score >= 2 else 1
             if left["series_winner"] is not None:
@@ -210,6 +222,11 @@ for _, entries in sorted(series.items(), key=lambda item: item[1][0]["date"]):
                     if player_chance is not None:
                         blended = .6 * player_chance + .4 * elo_chance
                         player_form_series_trials[weight].append((series_chance(blended, best_of), int(left["series_winner"] == left["team_id"]), best_of))
+                for weight in continuity_series_trials:
+                    continuity_chance = probability(left_profile, right_profile, .04, .06, weight)
+                    if continuity_chance is not None:
+                        blended = .6 * continuity_chance + .4 * elo_chance
+                        continuity_series_trials[weight].append((series_chance(blended, best_of), int(left["series_winner"] == left["team_id"]), best_of))
     for teams in maps:
         for entry in teams:
             history[entry["team_id"]].append(entry)
@@ -224,6 +241,7 @@ result = {
     "opponent_adjusted_elo_trials": {str(weight): {"map_accuracy_percent": accuracy(elo_map_trials[weight]), "series_accuracy_percent": accuracy(elo_series_trials[weight])} for weight in elo_map_trials},
     "confirmed_lineup_trials": {str(weight): {"map_accuracy_percent": accuracy(lineup_map_trials[weight]), "series_accuracy_percent": accuracy(lineup_series_trials[weight])} for weight in lineup_map_trials},
     "confirmed_player_form_trials": {str(weight): {"map_accuracy_percent": accuracy(player_form_map_trials[weight]), "series_accuracy_percent": accuracy(player_form_series_trials[weight])} for weight in player_form_map_trials},
+    "roster_continuity_trials": {str(weight): {"map_accuracy_percent": accuracy(continuity_map_trials[weight]), "series_accuracy_percent": accuracy(continuity_series_trials[weight])} for weight in continuity_map_trials},
 }
 print(result)
 with open(database_path + ".valorant-result.json", "w", encoding="utf-8") as output:
