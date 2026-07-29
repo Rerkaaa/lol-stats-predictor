@@ -62,6 +62,7 @@ def profile(games, lineup, patch, now):
     recent = [game for game, _, age in rows if age <= 45]
     player_rows = [player for game in games for player in game["player_rows"] if player["name"] in lineup]
     player_kda = weighted([((player["kills"] + player["assists"]) / player["deaths"] if player["deaths"] else None, max(0.1, 0.5 ** (max(0, (now - player["date"]).total_seconds() / 86400) / 45))) for player in player_rows])
+    lineup_win = weighted([(player["won"], max(0.1, 0.5 ** (max(0, (now - player["date"]).total_seconds() / 86400) / 45))) for player in player_rows])
     patch_players = [player for player in player_rows if patch and player["patch"] == patch]
     patch_win = weighted([(player["won"], max(0.1, 0.5 ** (max(0, (now - player["date"]).total_seconds() / 86400) / 45))) for player in patch_players])
     sides = []
@@ -72,13 +73,13 @@ def profile(games, lineup, patch, now):
     return {
         "win": metric("won"), "recent": sum(game["won"] for game in recent) / len(recent) if recent else None,
         "gd": metric("gd"), "xp": metric("xp"), "cs": metric("cs"), "continuity": continuity,
-        "roster_kda": player_kda, "patch_win": patch_win, "fb": metric("fb"), "ft": metric("ft"),
+        "roster_kda": player_kda, "lineup_win": lineup_win, "patch_win": patch_win, "fb": metric("fb"), "ft": metric("ft"),
         "objectives": (metric("dragons") or 0) + (metric("barons") or 0), "vision": metric("vision"), "side": side_rate,
         "effective": sum(weight for _, weight, _ in rows), "roster_games": len(player_rows), "patch_games": len(patch_players),
     }
 
 
-def predict(left, right):
+def predict(left, right, lineup_weight=0):
     factors = [
         (edge(left["win"], right["win"], .2), .18), (edge(left["recent"], right["recent"], .25), .12),
         (edge(left["gd"], right["gd"], 1200), .14), (edge(left["xp"], right["xp"], 1000), .09),
@@ -87,6 +88,10 @@ def predict(left, right):
         (edge(left["fb"], right["fb"], .2), .04), (edge(left["ft"], right["ft"], .2), .04),
         (edge(left["objectives"], right["objectives"], 1), .05), (edge(left["vision"], right["vision"], .8), .03), (edge(left["side"], right["side"], .25), .02),
     ]
+    if lineup_weight:
+        # Candidate only: the starting five's rolling win record. This is
+        # evaluated against actual historical starters before going live.
+        factors.append((edge(left["lineup_win"], right["lineup_win"], .25), lineup_weight))
     available = [(value, weight) for value, weight in factors if value is not None]
     if not available:
         return None
@@ -181,7 +186,8 @@ for _, teams in sorted(matches.items(), key=lambda item: item[1][0]["date"]):
         if chance is not None:
             rating_a, rating_b = elo_before.get(left_game["id"], {}).get(left_game["team_id"], (1500, 1500))
             elo_chance = 1 / (1 + 10 ** ((rating_b - rating_a) / 400))
-            predictions.append((chance, elo_chance, left_game["won"], left_game["date"].date().isoformat()))
+            lineup_trials = {str(weight): predict(left, right, weight) for weight in (.02, .04, .06, .08)}
+            predictions.append((chance, elo_chance, left_game["won"], left_game["date"].date().isoformat(), lineup_trials))
     history[left_game["team_id"]].append(left_game)
     history[right_game["team_id"]].append(right_game)
     if len(history[left_game["team_id"]]) > 120:
@@ -191,15 +197,20 @@ for _, teams in sorted(matches.items(), key=lambda item: item[1][0]["date"]):
 
 requested_sample = os.environ.get("BACKTEST_SAMPLE", "200")
 sample = predictions if requested_sample == "all" else predictions[-max(1, int(requested_sample)):]
-accuracy = sum((chance >= .5) == bool(won) for chance, _, won, _ in sample) / len(sample)
-brier = sum((chance - won) ** 2 for chance, _, won, _ in sample) / len(sample)
-mae = sum(abs(chance - won) for chance, _, won, _ in sample) / len(sample)
+accuracy = sum((chance >= .5) == bool(won) for chance, _, won, _, _ in sample) / len(sample)
+brier = sum((chance - won) ** 2 for chance, _, won, _, _ in sample) / len(sample)
+mae = sum(abs(chance - won) for chance, _, won, _, _ in sample) / len(sample)
 blends = {}
 for weight in (.1, .2, .3, .4, .5):
-    blended = [(1 - weight) * chance + weight * elo for chance, elo, _, _ in sample]
-    blends[str(weight)] = round(sum((chance >= .5) == bool(won) for chance, (_, _, won, _) in zip(blended, sample)) * 100 / len(sample), 1)
-elo_accuracy = sum((chance >= .5) == bool(won) for _, chance, won, _ in sample) * 100 / len(sample)
-result = {"tested_games": len(sample), "first_game": sample[0][3], "last_game": sample[-1][3], "winner_accuracy_percent": round(accuracy * 100, 1), "elo_accuracy_percent": round(elo_accuracy, 1), "blended_accuracy_percent": blends, "brier_score": round(brier, 4), "mean_absolute_error": round(mae, 4)}
+    blended = [(1 - weight) * chance + weight * elo for chance, elo, _, _, _ in sample]
+    blends[str(weight)] = round(sum((chance >= .5) == bool(won) for chance, (_, _, won, _, _) in zip(blended, sample)) * 100 / len(sample), 1)
+lineup_trial_blends = {}
+for lineup_weight in (.02, .04, .06, .08):
+    for elo_weight in (.3, .4):
+        blended = [(1 - elo_weight) * trials[str(lineup_weight)] + elo_weight * elo for _, elo, _, _, trials in sample]
+        lineup_trial_blends[f"lineup_{lineup_weight}_elo_{elo_weight}"] = round(sum((chance >= .5) == bool(won) for chance, (_, _, won, _, _) in zip(blended, sample)) * 100 / len(sample), 1)
+elo_accuracy = sum((chance >= .5) == bool(won) for _, chance, won, _, _ in sample) * 100 / len(sample)
+result = {"tested_games": len(sample), "first_game": sample[0][3], "last_game": sample[-1][3], "winner_accuracy_percent": round(accuracy * 100, 1), "elo_accuracy_percent": round(elo_accuracy, 1), "blended_accuracy_percent": blends, "confirmed_lineup_trial_percent": lineup_trial_blends, "brier_score": round(brier, 4), "mean_absolute_error": round(mae, 4)}
 print(result)
 with open(database_path + ".result.json", "w", encoding="utf-8") as output:
     json.dump(result, output)
