@@ -1,0 +1,54 @@
+name: Sync Games of Legends fallback data
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_games:
+        description: "Newest missing maps to inspect (blank uses 250 for catch-up, then 120 daily)"
+        required: false
+        type: string
+  schedule:
+    # Redundant UTC triggers; only the Europe/Tirane midnight run imports.
+    - cron: "1,31 22,23 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gol-fallback-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Import new Games of Legends maps
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_MAX_GAMES: ${{ inputs.max_games }}
+          ORACLE_IMPORT_URL: ${{ secrets.ORACLE_IMPORT_URL }}
+          ORACLE_IMPORT_TOKEN: ${{ secrets.ORACLE_IMPORT_TOKEN }}
+        run: |
+          if [[ "$EVENT_NAME" == "schedule" ]] && ! node scripts/is-tirane-midnight.mjs; then
+            echo "Not the Europe/Tirane midnight run; nothing to do."
+            exit 0
+          fi
+          if [[ -n "$INPUT_MAX_GAMES" ]]; then
+            export GOL_MAX_GAMES="$INPUT_MAX_GAMES"
+          elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            export GOL_MAX_GAMES=250
+          else
+            export GOL_MAX_GAMES=120
+          fi
+          node scripts/import-gol.mjs
