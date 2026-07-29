@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "lol-stats-predictor",
+  "account_id": "4689ef4b97c4b31fc60cb94dafd8749a",
   "main": "src/worker.ts",
   "compatibility_date": "2026-07-20",
   "assets": { "directory": "./public", "binding": "ASSETS" },
