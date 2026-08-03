@@ -788,6 +788,41 @@ async function liveValorantMatches(): Promise<LiveValorantMatch[]> {
   return matches.slice(0, 12);
 }
 
+type LiveLeagueMatch = {
+  id: string;
+  teamA: string;
+  teamB: string;
+  league: string;
+  watchUrl: string;
+  stream?: { provider: "youtube" | "twitch"; embedUrl?: string; channel?: string };
+};
+
+async function liveLeagueMatches(): Promise<LiveLeagueMatch[]> {
+  const response = await fetch("https://lolesports.com/en-US", { headers: { "user-agent": "LoL-Stats-Predictor/1.0" }, redirect: "follow" });
+  if (!response.ok) throw new Error("LoL Esports live schedule is unavailable.");
+  const page = await response.text();
+  const matches: LiveLeagueMatch[] = [];
+  const seen = new Set<string>();
+  const pattern = /"matchTeams":\[(.*?)\],"match":\{"__typename":"Match","id":"([^"]+)","state":"inProgress"[\s\S]{0,2200}?"streams":\[(.*?)\]/g;
+  for (const match of page.matchAll(pattern)) {
+    const names = [...match[1].matchAll(/"name":"((?:\\.|[^"\\])*)"/g)].map((item) => {
+      try { return JSON.parse(`"${item[1]}"`) as string; } catch { return item[1]; }
+    });
+    if (names.length < 2 || seen.has(match[2])) continue;
+    seen.add(match[2]);
+    const preceding = page.slice(Math.max(0, (match.index ?? 0) - 2400), match.index);
+    const leagueMatches = [...preceding.matchAll(/"league":\{[\s\S]{0,700}?"name":"([^"]+)"/g)];
+    const league = leagueMatches.at(-1)?.[1] ?? "League of Legends esports";
+    const streams = match[3].replace(/\\\//g, "/");
+    const youtube = streams.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]+)/i)?.[1];
+    const twitch = streams.match(/twitch\.tv\/([a-z0-9_]+)/i)?.[1];
+    const stream = youtube ? { provider: "youtube" as const, embedUrl: `https://www.youtube-nocookie.com/embed/${youtube}?autoplay=0` }
+      : twitch ? { provider: "twitch" as const, channel: twitch } : undefined;
+    matches.push({ id: match[2], teamA: names[0], teamB: names[1], league, watchUrl: "https://lolesports.com/en-US", stream });
+  }
+  return matches.slice(0, 12);
+}
+
 export default {
   async fetch(request: Request, env: Env) {
     const url = new URL(request.url);
@@ -833,6 +868,13 @@ export default {
     if (url.pathname === "/api/live-matches") {
       try {
         return json({ updatedAt: new Date().toISOString(), matches: await liveValorantMatches() });
+      } catch (error) {
+        return json({ error: errorMessage(error) }, 502);
+      }
+    }
+    if (url.pathname === "/api/live-league") {
+      try {
+        return json({ updatedAt: new Date().toISOString(), matches: await liveLeagueMatches() });
       } catch (error) {
         return json({ error: errorMessage(error) }, 502);
       }
