@@ -10,6 +10,8 @@ export interface Env {
   IMPORT_TOKEN?: string;
   VALORANT_IMPORT_TOKEN?: string;
   RIOT_API_KEY?: string;
+  ADMIN_PASSWORD?: string;
+  ADMIN_SESSION_SECRET?: string;
 }
 
 type TeamRow = { id: number; name: string };
@@ -50,6 +52,32 @@ const validStart = (body: StartImportBody) => Number.isInteger(body.year) && (bo
 const authorized = (request: Request, env: Env) =>
   !!env.IMPORT_TOKEN && request.headers.get("authorization") === `Bearer ${env.IMPORT_TOKEN}`;
 
+const adminCookieName = "lol_stats_admin";
+const encoder = new TextEncoder();
+const bytesToHex = (value: ArrayBuffer) => [...new Uint8Array(value)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+const safeEqual = (left: string, right: string) => {
+  const a = encoder.encode(left), b = encoder.encode(right);
+  if (a.length !== b.length) return false;
+  let different = 0;
+  for (let index = 0; index < a.length; index += 1) different |= a[index] ^ b[index];
+  return different === 0;
+};
+async function adminSignature(payload: string, secret: string) {
+  const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return bytesToHex(await crypto.subtle.sign("HMAC", key, encoder.encode(payload)));
+}
+async function adminSession(request: Request, env: Env) {
+  if (!env.ADMIN_SESSION_SECRET) return false;
+  const value = request.headers.get("cookie")?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${adminCookieName}=`))?.slice(adminCookieName.length + 1);
+  if (!value) return false;
+  const [expires, signature] = value.split(".");
+  if (!expires || !signature || !/^\d+$/.test(expires) || Number(expires) < Date.now()) return false;
+  return safeEqual(signature, await adminSignature(expires, env.ADMIN_SESSION_SECRET));
+}
+const cleanText = (value: unknown, maximum = 160) => typeof value === "string" ? value.trim().slice(0, maximum) : "";
+const nullableText = (value: unknown, maximum = 160) => cleanText(value, maximum) || null;
+const validUrl = (value: string | null) => !value || /^https:\/\//i.test(value);
+
 async function handleLeaguepediaSeriesAdmin(request: Request, env: Env) {
   if (!authorized(request, env)) return json({ error: "Unauthorized" }, 401);
   if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
@@ -64,6 +92,84 @@ async function handleLeaguepediaSeriesAdmin(request: Request, env: Env) {
      ON CONFLICT(game_id) DO UPDATE SET match_id=excluded.match_id,game_number=excluded.game_number,played_at=excluded.played_at,competition=excluded.competition,team_a=excluded.team_a,team_b=excluded.team_b,winner=excluded.winner,patch=excluded.patch,imported_at=CURRENT_TIMESTAMP`,
   ).bind(game.gameId, game.matchId, Number.isInteger(game.gameNumber) ? game.gameNumber : null, game.playedAt ?? null, game.competition ?? null, game.teamA ?? null, game.teamB ?? null, game.winner ?? null, game.patch ?? null)));
   return json({ imported: games.length });
+}
+
+async function devLogin(request: Request, env: Env) {
+  if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
+  if (!env.ADMIN_PASSWORD || !env.ADMIN_SESSION_SECRET) return json({ error: "Admin access is not configured." }, 503);
+  const body = await request.json<{ password?: string }>().catch(() => ({}));
+  if (!safeEqual(cleanText(body.password, 500), env.ADMIN_PASSWORD)) return json({ error: "Incorrect password." }, 401);
+  const expires = String(Date.now() + 1000 * 60 * 60 * 12);
+  const signature = await adminSignature(expires, env.ADMIN_SESSION_SECRET);
+  return new Response(JSON.stringify({ ok: true, expiresAt: new Date(Number(expires)).toISOString() }), {
+    headers: { "content-type": "application/json", "cache-control": "no-store", "set-cookie": `${adminCookieName}=${expires}.${signature}; HttpOnly; Secure; SameSite=Strict; Path=/api/admin/dev; Max-Age=43200` },
+  });
+}
+
+function devLogout() {
+  return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json", "cache-control": "no-store", "set-cookie": `${adminCookieName}=; HttpOnly; Secure; SameSite=Strict; Path=/api/admin/dev; Max-Age=0` } });
+}
+
+async function devBootstrap(env: Env) {
+  const [settings, leagues, teams, players, memberships, accounts] = await Promise.all([
+    env.DB.prepare("SELECT setting_key,setting_value FROM site_visual_settings ORDER BY setting_key").all(),
+    env.DB.prepare("SELECT * FROM managed_leagues ORDER BY name").all(),
+    env.DB.prepare("SELECT t.*,l.name league_name FROM managed_pro_teams t LEFT JOIN managed_leagues l ON l.id=t.league_id ORDER BY t.name").all(),
+    env.DB.prepare("SELECT * FROM managed_pro_players ORDER BY display_name").all(),
+    env.DB.prepare("SELECT m.*,t.name team_name,p.display_name player_name FROM managed_team_memberships m JOIN managed_pro_teams t ON t.id=m.team_id JOIN managed_pro_players p ON p.id=m.player_id ORDER BY t.name,p.display_name").all(),
+    env.DB.prepare("SELECT a.*,p.display_name player_name FROM managed_player_accounts a JOIN managed_pro_players p ON p.id=a.player_id ORDER BY p.display_name,a.account_type").all(),
+  ]);
+  return { settings: settings.results, leagues: leagues.results, teams: teams.results, players: players.results, memberships: memberships.results, accounts: accounts.results };
+}
+
+async function devAdmin(request: Request, env: Env, pathname: string) {
+  if (pathname === "/api/admin/dev/login") return devLogin(request, env);
+  if (pathname === "/api/admin/dev/logout") return devLogout();
+  if (pathname === "/api/admin/dev/session") return json({ authenticated: await adminSession(request, env) });
+  if (!(await adminSession(request, env))) return json({ error: "Admin sign-in required." }, 401);
+  if (pathname === "/api/admin/dev/bootstrap" && request.method === "GET") return json(await devBootstrap(env));
+  if (pathname === "/api/admin/dev/theme") {
+    if (request.method === "GET") return json((await env.DB.prepare("SELECT setting_key,setting_value FROM site_visual_settings ORDER BY setting_key").all()).results);
+    if (request.method === "PUT") {
+      const body = await request.json<{ settings?: Record<string, unknown> }>();
+      const entries = Object.entries(body.settings ?? {}).filter(([key, value]) => /^[a-z][a-z0-9_-]{0,60}$/i.test(key) && typeof value === "string" && value.length <= 10000);
+      await env.DB.batch(entries.map(([key, value]) => env.DB.prepare("INSERT INTO site_visual_settings(setting_key,setting_value,updated_at) VALUES(?,?,CURRENT_TIMESTAMP) ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value,updated_at=CURRENT_TIMESTAMP").bind(key, value)));
+      return json({ saved: entries.length });
+    }
+    if (request.method === "DELETE") { await env.DB.prepare("DELETE FROM site_visual_settings").run(); return json({ ok: true }); }
+  }
+  const collection = pathname.match(/^\/api\/admin\/dev\/(leagues|teams|players|memberships|accounts)(?:\/(\d+))?$/);
+  if (!collection) return json({ error: "Not found" }, 404);
+  const [, kind, idValue] = collection;
+  const id = idValue ? Number(idValue) : null;
+  if (request.method === "DELETE" && id) {
+    const table = ({ leagues: "managed_leagues", teams: "managed_pro_teams", players: "managed_pro_players", memberships: "managed_team_memberships", accounts: "managed_player_accounts" } as Record<string, string>)[kind];
+    await env.DB.prepare(`DELETE FROM ${table} WHERE id=?`).bind(id).run();
+    return json({ ok: true });
+  }
+  if (request.method !== "POST" || id) return json({ error: "Method not allowed" }, 405);
+  const body = await request.json<Record<string, unknown>>();
+  if (kind === "leagues") {
+    const name = cleanText(body.name); if (!name) return json({ error: "League name is required." }, 400);
+    const logo = nullableText(body.logoUrl, 1000); if (!validUrl(logo)) return json({ error: "Logo must be an HTTPS URL." }, 400);
+    await env.DB.prepare("INSERT INTO managed_leagues(name,region,tier,logo_url) VALUES(?,?,?,?)").bind(name, nullableText(body.region, 80), nullableText(body.tier, 80), logo).run();
+  } else if (kind === "teams") {
+    const name = cleanText(body.name); if (!name) return json({ error: "Team name is required." }, 400);
+    const logo = nullableText(body.logoUrl, 1000); if (!validUrl(logo)) return json({ error: "Logo must be an HTTPS URL." }, 400);
+    await env.DB.prepare("INSERT INTO managed_pro_teams(league_id,name,short_name,region,logo_url) VALUES(?,?,?,?,?)").bind(Number.isInteger(Number(body.leagueId)) ? Number(body.leagueId) : null, name, nullableText(body.shortName, 30), nullableText(body.region, 80), logo).run();
+  } else if (kind === "players") {
+    const name = cleanText(body.displayName); if (!name) return json({ error: "Player display name is required." }, 400);
+    const photo = nullableText(body.photoUrl, 1000); if (!validUrl(photo)) return json({ error: "Photo must be an HTTPS URL." }, 400);
+    await env.DB.prepare("INSERT INTO managed_pro_players(display_name,real_name,role,country,photo_url) VALUES(?,?,?,?,?)").bind(name, nullableText(body.realName), nullableText(body.role, 40), nullableText(body.country, 80), photo).run();
+  } else if (kind === "memberships") {
+    const teamId = Number(body.teamId), playerId = Number(body.playerId); if (!Number.isInteger(teamId) || !Number.isInteger(playerId)) return json({ error: "Choose a team and player." }, 400);
+    await env.DB.prepare("INSERT INTO managed_team_memberships(team_id,player_id,role,status,starts_at) VALUES(?,?,?,?,?)").bind(teamId, playerId, nullableText(body.role, 40), cleanText(body.status, 30) || "starter", nullableText(body.startsAt, 30)).run();
+  } else {
+    const playerId = Number(body.playerId), gameName = cleanText(body.gameName, 30), tagLine = cleanText(body.tagLine, 10), region = cleanText(body.region, 10).toUpperCase();
+    if (!Number.isInteger(playerId) || !gameName || !tagLine || !region) return json({ error: "Player, Riot ID, tag, and region are required." }, 400);
+    await env.DB.prepare("INSERT INTO managed_player_accounts(player_id,game_name,tag_line,region,account_type,confidence,source_url) VALUES(?,?,?,?,?,?,?)").bind(playerId, gameName, tagLine, region, cleanText(body.accountType, 30) || "primary", cleanText(body.confidence, 30) || "confirmed", nullableText(body.sourceUrl, 1000)).run();
+  }
+  return json(await devBootstrap(env), 201);
 }
 
 const riotRouting = {
@@ -868,6 +974,11 @@ async function liveLeagueMatches(date: string, selectedLeague: string | null, da
 export default {
   async fetch(request: Request, env: Env) {
     const url = new URL(request.url);
+    if (url.pathname.startsWith("/api/admin/dev/")) return devAdmin(request, env, url.pathname);
+    if (url.pathname === "/api/site-theme") {
+      const { results = [] } = await env.DB.prepare("SELECT setting_key,setting_value FROM site_visual_settings WHERE setting_key IN ('page_bg','panel_bg','text','muted','border','accent','radius','font_scale','custom_css') ORDER BY setting_key").all<{ setting_key: string; setting_value: string }>();
+      return json(Object.fromEntries(results.map((row) => [row.setting_key, row.setting_value])));
+    }
     if (url.pathname.startsWith("/api/admin/oracle/")) return handleOracleAdmin(request, env, url.pathname);
     if (url.pathname === "/api/admin/leaguepedia/series-games") return handleLeaguepediaSeriesAdmin(request, env);
     if (url.pathname === "/api/admin/valorant/series") return handleValorantAdmin(request, env);
