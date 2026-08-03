@@ -801,7 +801,30 @@ type LiveLeagueMatch = {
   status: "LIVE" | "UPCOMING";
   watchUrl: string;
   stream?: { provider: "youtube" | "twitch"; embedUrl?: string; channel?: string };
+  broadcast: { free: boolean; youtube?: { handle: string; url: string }; twitch?: { channel: string; url: string }; note?: string };
 };
+
+const leagueBroadcasts: Record<string, LiveLeagueMatch["broadcast"]> = {
+  "LEC": { free: true, youtube: { handle: "LEC", url: "https://www.youtube.com/@LEC/live" }, twitch: { channel: "lec", url: "https://www.twitch.tv/lec" } },
+  "LCK": { free: true, youtube: { handle: "LCKglobal", url: "https://www.youtube.com/@LCKglobal/live" }, twitch: { channel: "lck", url: "https://www.twitch.tv/lck" } },
+  "LCK Challengers": { free: true, youtube: { handle: "LCKglobal", url: "https://www.youtube.com/@LCKglobal/live" }, twitch: { channel: "lck", url: "https://www.twitch.tv/lck" } },
+  "LCS": { free: true, youtube: { handle: "LCS", url: "https://www.youtube.com/@LCS/live" }, twitch: { channel: "lcs", url: "https://www.twitch.tv/lcs" } },
+  "CBLOL": { free: true, youtube: { handle: "CBLOL", url: "https://www.youtube.com/@CBLOL/live" }, twitch: { channel: "cblol", url: "https://www.twitch.tv/cblol" } },
+  "Circuito Desafiante": { free: true, youtube: { handle: "CBLOL", url: "https://www.youtube.com/@CBLOL/live" }, twitch: { channel: "cblol", url: "https://www.twitch.tv/cblol" } },
+  "NLC": { free: true, youtube: { handle: "NLC", url: "https://www.youtube.com/@NLC/live" }, twitch: { channel: "northernleagueoflegends", url: "https://www.twitch.tv/northernleagueoflegends" } },
+  "PCS": { free: true, youtube: { handle: "lolpacific", url: "https://www.youtube.com/@lolpacific/live" } },
+  "KeSPA Cup": { free: false, note: "No free official livestream is currently listed for this competition." },
+};
+
+const leagueBroadcast = (league: string): LiveLeagueMatch["broadcast"] => leagueBroadcasts[league] ?? { free: false, note: "No free official YouTube or Twitch broadcast is currently mapped for this competition." };
+
+async function resolveYoutubeLive(handle: string) {
+  const response = await fetch(`https://www.youtube.com/@${encodeURIComponent(handle)}/live`, { headers: { "user-agent": "Mozilla/5.0" }, redirect: "follow" });
+  if (!response.ok) return null;
+  const page = await response.text();
+  const id = response.url.match(/[?&]v=([\w-]{6,})/)?.[1] ?? page.match(/"videoId":"([\w-]{6,})"/)?.[1];
+  return id ? `https://www.youtube-nocookie.com/embed/${id}?autoplay=0` : null;
+}
 
 async function liveLeagueMatches(date: string, selectedLeague: string | null): Promise<{ matches: LiveLeagueMatch[]; leagues: string[] }> {
   const response = await fetch("https://lolesports.com/en-US", { headers: { "user-agent": "LoL-Stats-Predictor/1.0" }, redirect: "follow" });
@@ -827,7 +850,7 @@ async function liveLeagueMatches(date: string, selectedLeague: string | null): P
     const twitch = streams.match(/twitch\.tv\/([a-z0-9_]+)/i)?.[1] ?? streams.match(/"provider":"twitch"[\s\S]{0,180}?"parameter":"([a-z0-9_]+)"/i)?.[1];
     const stream = youtube ? { provider: "youtube" as const, embedUrl: `https://www.youtube-nocookie.com/embed/${youtube}?autoplay=0` }
       : twitch ? { provider: "twitch" as const, channel: twitch } : undefined;
-    matches.push({ id: matchId, teamA: names[0], teamB: names[1], league, startsAt: match[1], status: match[5] === "inProgress" ? "LIVE" : "UPCOMING", watchUrl: "https://lolesports.com/en-US", stream });
+    matches.push({ id: matchId, teamA: names[0], teamB: names[1], league, startsAt: match[1], status: match[5] === "inProgress" ? "LIVE" : "UPCOMING", watchUrl: "https://lolesports.com/en-US", stream, broadcast: leagueBroadcast(league) });
   }
   return { matches: matches.slice(0, 20), leagues: [...leagues].sort() };
 }
@@ -891,6 +914,13 @@ export default {
       } catch (error) {
         return json({ error: errorMessage(error) }, 502);
       }
+    }
+    if (url.pathname === "/api/live-league-stream") {
+      const league = url.searchParams.get("league")?.trim() ?? "";
+      const broadcast = leagueBroadcast(league);
+      if (!broadcast.free) return json(broadcast);
+      const youtube = broadcast.youtube ? await resolveYoutubeLive(broadcast.youtube.handle).catch(() => null) : null;
+      return json({ ...broadcast, youtube: broadcast.youtube ? { ...broadcast.youtube, embedUrl: youtube } : undefined });
     }
     if (url.pathname === "/api/valorant/match-history") {
       const teamA = Number(url.searchParams.get("teamA")), teamB = Number(url.searchParams.get("teamB"));
