@@ -146,7 +146,9 @@ if (!dryRun) {
 
 const games = [];
 const parsedPageIds = new Set();
-for (const candidate of candidates.filter((game) => !knownIds.has(`gol:${game.id}`))) {
+// Always inspect the listed first game: an already-known Game 1 can link to
+// newly completed Game 2/Game 3 pages that the home feed does not list itself.
+for (const candidate of candidates) {
   const url = `https://gol.gg/game/stats/${candidate.id}/page-game/`;
   const html = await get(url);
   for (const gameId of linkedGameIds(html, candidate.id)) {
