@@ -797,6 +797,8 @@ type LiveLeagueMatch = {
   teamA: string;
   teamB: string;
   league: string;
+  startsAt: string;
+  status: "LIVE" | "UPCOMING";
   watchUrl: string;
   stream?: { provider: "youtube" | "twitch"; embedUrl?: string; channel?: string };
 };
@@ -825,7 +827,7 @@ async function liveLeagueMatches(date: string, selectedLeague: string | null): P
     const twitch = streams.match(/twitch\.tv\/([a-z0-9_]+)/i)?.[1] ?? streams.match(/"provider":"twitch"[\s\S]{0,180}?"parameter":"([a-z0-9_]+)"/i)?.[1];
     const stream = youtube ? { provider: "youtube" as const, embedUrl: `https://www.youtube-nocookie.com/embed/${youtube}?autoplay=0` }
       : twitch ? { provider: "twitch" as const, channel: twitch } : undefined;
-    matches.push({ id: matchId, teamA: names[0], teamB: names[1], league, watchUrl: "https://lolesports.com/en-US", stream });
+    matches.push({ id: matchId, teamA: names[0], teamB: names[1], league, startsAt: match[1], status: match[5] === "inProgress" ? "LIVE" : "UPCOMING", watchUrl: "https://lolesports.com/en-US", stream });
   }
   return { matches: matches.slice(0, 20), leagues: [...leagues].sort() };
 }
