@@ -750,6 +750,44 @@ async function valorantHeadToHeadSeries(db: D1Database, teamA: number, teamB: nu
   return series.map((row: any) => ({ ...row, maps: mapsBySeries.get(row.id) ?? [] }));
 }
 
+type LiveValorantMatch = {
+  teamA: string;
+  teamB: string;
+  event: string;
+  status: string;
+  matchUrl: string;
+  watchUrl: string;
+  stream?: { provider: "twitch" | "youtube"; embedUrl?: string };
+};
+
+const stripHtml = (value: string) => value.replace(/<[^>]*>/g, " ").replace(/&nbsp;|&#39;|&amp;|&ndash;|&mdash;/gi, " ").replace(/\s+/g, " ").trim();
+
+async function liveValorantMatches(): Promise<LiveValorantMatch[]> {
+  const response = await fetch("https://www.vlr.gg/matches", { headers: { "user-agent": "LoL-Stats-Predictor/1.0" } });
+  if (!response.ok) throw new Error("Live schedule source is unavailable.");
+  const page = await response.text();
+  const matches: LiveValorantMatch[] = [];
+  const cards = page.matchAll(/<a\s+href="(\/\d+\/[^"]+)"\s+class="[^"]*match-item[^"]*mod-live[^"]*"[^>]*>([\s\S]*?)<\/a>/gi);
+  for (const card of cards) {
+    const matchUrl = `https://www.vlr.gg${card[1]}`;
+    const html = card[2];
+    const names = [...html.matchAll(/match-item-vs-team-name[\s\S]*?<div class="text-of">([\s\S]*?)<\/div>/gi)].map((item) => stripHtml(item[1]));
+    if (names.length < 2) continue;
+    const event = stripHtml(html.match(/<div class="match-item-event text-of">([\s\S]*?)<\/div>\s*<div class="match-item-icon"/i)?.[1] ?? "Valorant esports");
+    let stream: LiveValorantMatch["stream"];
+    try {
+      const matchResponse = await fetch(matchUrl, { headers: { "user-agent": "LoL-Stats-Predictor/1.0" } });
+      const matchPage = matchResponse.ok ? await matchResponse.text() : "";
+      const twitch = matchPage.match(/https?:\/\/(?:www\.)?twitch\.tv\/([a-z0-9_]+)/i)?.[1];
+      const youtube = matchPage.match(/https?:\/\/(?:www\.)?youtube\.com\/watch\?v=([\w-]+)/i)?.[1] ?? matchPage.match(/https?:\/\/youtu\.be\/([\w-]+)/i)?.[1];
+      if (youtube) stream = { provider: "youtube", embedUrl: `https://www.youtube-nocookie.com/embed/${youtube}?autoplay=0` };
+      else if (twitch) stream = { provider: "twitch" };
+    } catch { /* The match remains usable through its public watch page. */ }
+    matches.push({ teamA: names[0], teamB: names[1], event, status: "LIVE", matchUrl, watchUrl: matchUrl, stream });
+  }
+  return matches.slice(0, 12);
+}
+
 export default {
   async fetch(request: Request, env: Env) {
     const url = new URL(request.url);
@@ -792,6 +830,13 @@ export default {
       return json(await valorantRoster(env.DB, teamId));
     }
     if (url.pathname === "/api/valorant/latest-series") return json(await latestValorantSeries(env.DB));
+    if (url.pathname === "/api/live-matches") {
+      try {
+        return json({ updatedAt: new Date().toISOString(), matches: await liveValorantMatches() });
+      } catch (error) {
+        return json({ error: errorMessage(error) }, 502);
+      }
+    }
     if (url.pathname === "/api/valorant/match-history") {
       const teamA = Number(url.searchParams.get("teamA")), teamB = Number(url.searchParams.get("teamB"));
       if (!Number.isInteger(teamA) || !Number.isInteger(teamB) || teamA === teamB) return json({ error: "Select two distinct Valorant teams." }, 400);
