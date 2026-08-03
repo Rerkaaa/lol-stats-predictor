@@ -826,17 +826,20 @@ async function resolveYoutubeLive(handle: string) {
   return id ? `https://www.youtube-nocookie.com/embed/${id}?autoplay=0` : null;
 }
 
-async function liveLeagueMatches(date: string, selectedLeague: string | null): Promise<{ matches: LiveLeagueMatch[]; leagues: string[] }> {
+async function liveLeagueMatches(date: string, selectedLeague: string | null, days = 1): Promise<{ matches: LiveLeagueMatch[]; leagues: string[] }> {
   const response = await fetch("https://lolesports.com/en-US", { headers: { "user-agent": "LoL-Stats-Predictor/1.0" }, redirect: "follow" });
   if (!response.ok) throw new Error("LoL Esports live schedule is unavailable.");
   const page = await response.text();
   const matches: LiveLeagueMatch[] = [];
   const seen = new Set<string>();
   const leagues = new Set<string>();
+  const endDate = new Date(`${date}T00:00:00Z`);
+  endDate.setUTCDate(endDate.getUTCDate() + Math.max(0, days - 1));
+  const lastDate = endDate.toISOString().slice(0, 10);
   const pattern = /"startTime":"([^"]+)"[\s\S]{0,1600}?"league":\{[\s\S]{0,700}?"name":"([^"]+)"[\s\S]{0,1600}?"matchTeams":\[(.*?)\],"match":\{[\s\S]{0,220}?"id":"([^"]+)"[\s\S]{0,900}?"state":"(inProgress|unstarted)"[\s\S]{0,1800}?"streams":\[(.*?)\]/g;
   for (const match of page.matchAll(pattern)) {
     const startsOn = match[1].slice(0, 10), league = match[2];
-    if (startsOn !== date) continue;
+    if (startsOn < date || startsOn > lastDate) continue;
     leagues.add(league);
     if (selectedLeague && selectedLeague !== league) continue;
     const names = [...match[3].matchAll(/"name":"((?:\\.|[^"\\])*)"/g)].map((item) => {
@@ -852,7 +855,14 @@ async function liveLeagueMatches(date: string, selectedLeague: string | null): P
       : twitch ? { provider: "twitch" as const, channel: twitch } : undefined;
     matches.push({ id: matchId, teamA: names[0], teamB: names[1], league, startsAt: match[1], status: match[5] === "inProgress" ? "LIVE" : "UPCOMING", watchUrl: "https://lolesports.com/en-US", stream, broadcast: leagueBroadcast(league) });
   }
-  return { matches: matches.slice(0, 20), leagues: [...leagues].sort() };
+  const daily = new Map<string, number>();
+  const limited = matches.sort((left, right) => left.startsAt.localeCompare(right.startsAt)).filter((match) => {
+    const key = match.startsAt.slice(0, 10), count = daily.get(key) ?? 0;
+    if (count >= 20) return false;
+    daily.set(key, count + 1);
+    return true;
+  });
+  return { matches: limited, leagues: [...leagues].sort() };
 }
 
 export default {
@@ -910,7 +920,9 @@ export default {
         const date = /^\d{4}-\d{2}-\d{2}$/.test(dateValue) ? dateValue : new Date().toISOString().slice(0, 10);
         const leagueValue = url.searchParams.get("league")?.trim() ?? "";
         const league = leagueValue.length > 0 && leagueValue.length <= 100 ? leagueValue : null;
-        return json({ updatedAt: new Date().toISOString(), date, ...(await liveLeagueMatches(date, league)) });
+        const requestedDays = Number(url.searchParams.get("days"));
+        const days = Number.isInteger(requestedDays) ? Math.max(1, Math.min(14, requestedDays)) : 1;
+        return json({ updatedAt: new Date().toISOString(), date, days, ...(await liveLeagueMatches(date, league, days)) });
       } catch (error) {
         return json({ error: errorMessage(error) }, 502);
       }
@@ -921,6 +933,9 @@ export default {
       if (!broadcast.free) return json(broadcast);
       const youtube = broadcast.youtube ? await resolveYoutubeLive(broadcast.youtube.handle).catch(() => null) : null;
       return json({ ...broadcast, youtube: broadcast.youtube ? { ...broadcast.youtube, embedUrl: youtube } : undefined });
+    }
+    if (url.pathname === "/api/live-league-broadcasts") {
+      return json(Object.entries(leagueBroadcasts).map(([league, broadcast]) => ({ league, ...broadcast })).sort((left, right) => left.league.localeCompare(right.league)));
     }
     if (url.pathname === "/api/valorant/match-history") {
       const teamA = Number(url.searchParams.get("teamA")), teamB = Number(url.searchParams.get("teamB"));
