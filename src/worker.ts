@@ -808,7 +808,7 @@ async function liveLeagueMatches(date: string, selectedLeague: string | null): P
   const matches: LiveLeagueMatch[] = [];
   const seen = new Set<string>();
   const leagues = new Set<string>();
-  const pattern = /"startTime":"([^"]+)"[\s\S]{0,1600}?"league":\{[\s\S]{0,700}?"name":"([^"]+)"[\s\S]{0,1600}?"matchTeams":\[(.*?)\],"match":\{[\s\S]{0,900}?"state":"(inProgress|unstarted)"[\s\S]{0,1800}?"streams":\[(.*?)\]/g;
+  const pattern = /"startTime":"([^"]+)"[\s\S]{0,1600}?"league":\{[\s\S]{0,700}?"name":"([^"]+)"[\s\S]{0,1600}?"matchTeams":\[(.*?)\],"match":\{[\s\S]{0,220}?"id":"([^"]+)"[\s\S]{0,900}?"state":"(inProgress|unstarted)"[\s\S]{0,1800}?"streams":\[(.*?)\]/g;
   for (const match of page.matchAll(pattern)) {
     const startsOn = match[1].slice(0, 10), league = match[2];
     if (startsOn !== date) continue;
