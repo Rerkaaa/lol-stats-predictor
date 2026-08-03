@@ -16,7 +16,7 @@ on:
         required: false
         type: string
   schedule:
-    - cron: "17 1 * * *"
+    - cron: "17 * * * *"
 
 permissions:
   contents: read
@@ -47,7 +47,13 @@ jobs:
           VLR_MATCH_LIMIT: ${{ inputs.match_limit }}
         shell: bash
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.season }}" ]]; then
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            # Hourly refreshes only need the active season and a small recent window.
+            # This avoids repeatedly scraping the full 2025–2026 archive.
+            export VLR_EVENT_LIMIT=15
+            export VLR_MATCH_LIMIT=120
+            node scripts/import-valorant-vlr.mjs 2026
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.season }}" ]]; then
             node scripts/import-valorant-vlr.mjs "${{ inputs.season }}"
           else
             node scripts/import-valorant-vlr.mjs 2025 2026

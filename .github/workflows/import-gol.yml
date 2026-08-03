@@ -9,7 +9,7 @@ on:
         type: string
   schedule:
     # The importer only fetches map pages that are not already stored.
-    - cron: "*/30 * * * *"
+    - cron: "7 * * * *"
 
 permissions:
   contents: read
