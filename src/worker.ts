@@ -348,11 +348,11 @@ const lineupConfirmation = (profile: Awaited<ReturnType<typeof teamProfile>>, ex
   return { active, expected, matched, confirmed: expected.length === 5 && matched.length === 5 };
 };
 
-type SeriesFilter = { teamId?: number; opponentId?: number };
+type SeriesFilter = { teamId?: number; opponentId?: number; competition?: string };
 
 async function latestSeries(db: D1Database, filter: SeriesFilter = {}) {
   const conditions = ["m.source_game_id LIKE 'oracle:%'", "m.played_at>='2022-01-01'"];
-  const bindings: number[] = [];
+  const bindings: Array<number | string> = [];
   if (filter.teamId) {
     conditions.push("(m.blue_team_id=? OR m.red_team_id=?)");
     bindings.push(filter.teamId, filter.teamId);
@@ -360,6 +360,10 @@ async function latestSeries(db: D1Database, filter: SeriesFilter = {}) {
   if (filter.opponentId) {
     conditions.push("(m.blue_team_id=? OR m.red_team_id=?)");
     bindings.push(filter.opponentId, filter.opponentId);
+  }
+  if (filter.competition) {
+    conditions.push("COALESCE(m.stage,'Unknown competition')=?");
+    bindings.push(filter.competition);
   }
   const statement = db.prepare(
     `SELECT m.id matchId,m.played_at playedAt,m.stage,m.patch,m.duration_seconds durationSeconds,
@@ -797,30 +801,33 @@ type LiveLeagueMatch = {
   stream?: { provider: "youtube" | "twitch"; embedUrl?: string; channel?: string };
 };
 
-async function liveLeagueMatches(): Promise<LiveLeagueMatch[]> {
+async function liveLeagueMatches(date: string, selectedLeague: string | null): Promise<{ matches: LiveLeagueMatch[]; leagues: string[] }> {
   const response = await fetch("https://lolesports.com/en-US", { headers: { "user-agent": "LoL-Stats-Predictor/1.0" }, redirect: "follow" });
   if (!response.ok) throw new Error("LoL Esports live schedule is unavailable.");
   const page = await response.text();
   const matches: LiveLeagueMatch[] = [];
   const seen = new Set<string>();
-  const pattern = /"matchTeams":\[(.*?)\],"match":\{"__typename":"Match","id":"([^"]+)","state":"inProgress"[\s\S]{0,2200}?"streams":\[(.*?)\]/g;
+  const leagues = new Set<string>();
+  const pattern = /"startTime":"([^"]+)"[\s\S]{0,1600}?"league":\{[\s\S]{0,700}?"name":"([^"]+)"[\s\S]{0,1600}?"matchTeams":\[(.*?)\],"match":\{[\s\S]{0,900}?"state":"(inProgress|unstarted)"[\s\S]{0,1800}?"streams":\[(.*?)\]/g;
   for (const match of page.matchAll(pattern)) {
-    const names = [...match[1].matchAll(/"name":"((?:\\.|[^"\\])*)"/g)].map((item) => {
+    const startsOn = match[1].slice(0, 10), league = match[2];
+    if (startsOn !== date) continue;
+    leagues.add(league);
+    if (selectedLeague && selectedLeague !== league) continue;
+    const names = [...match[3].matchAll(/"name":"((?:\\.|[^"\\])*)"/g)].map((item) => {
       try { return JSON.parse(`"${item[1]}"`) as string; } catch { return item[1]; }
     });
-    if (names.length < 2 || seen.has(match[2])) continue;
-    seen.add(match[2]);
-    const preceding = page.slice(Math.max(0, (match.index ?? 0) - 2400), match.index);
-    const leagueMatches = [...preceding.matchAll(/"league":\{[\s\S]{0,700}?"name":"([^"]+)"/g)];
-    const league = leagueMatches.at(-1)?.[1] ?? "League of Legends esports";
-    const streams = match[3].replace(/\\\//g, "/");
-    const youtube = streams.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]+)/i)?.[1];
-    const twitch = streams.match(/twitch\.tv\/([a-z0-9_]+)/i)?.[1];
+    const matchId = match[4];
+    if (names.length < 2 || seen.has(matchId)) continue;
+    seen.add(matchId);
+    const streams = match[6].replace(/\\\//g, "/");
+    const youtube = streams.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]+)/i)?.[1] ?? streams.match(/"provider":"youtube"[\s\S]{0,180}?"parameter":"([\w-]+)"/i)?.[1];
+    const twitch = streams.match(/twitch\.tv\/([a-z0-9_]+)/i)?.[1] ?? streams.match(/"provider":"twitch"[\s\S]{0,180}?"parameter":"([a-z0-9_]+)"/i)?.[1];
     const stream = youtube ? { provider: "youtube" as const, embedUrl: `https://www.youtube-nocookie.com/embed/${youtube}?autoplay=0` }
       : twitch ? { provider: "twitch" as const, channel: twitch } : undefined;
-    matches.push({ id: match[2], teamA: names[0], teamB: names[1], league, watchUrl: "https://lolesports.com/en-US", stream });
+    matches.push({ id: matchId, teamA: names[0], teamB: names[1], league, watchUrl: "https://lolesports.com/en-US", stream });
   }
-  return matches.slice(0, 12);
+  return { matches: matches.slice(0, 20), leagues: [...leagues].sort() };
 }
 
 export default {
@@ -874,7 +881,11 @@ export default {
     }
     if (url.pathname === "/api/live-league") {
       try {
-        return json({ updatedAt: new Date().toISOString(), matches: await liveLeagueMatches() });
+        const dateValue = url.searchParams.get("date") ?? new Date().toISOString().slice(0, 10);
+        const date = /^\d{4}-\d{2}-\d{2}$/.test(dateValue) ? dateValue : new Date().toISOString().slice(0, 10);
+        const leagueValue = url.searchParams.get("league")?.trim() ?? "";
+        const league = leagueValue.length > 0 && leagueValue.length <= 100 ? leagueValue : null;
+        return json({ updatedAt: new Date().toISOString(), date, ...(await liveLeagueMatches(date, league)) });
       } catch (error) {
         return json({ error: errorMessage(error) }, 502);
       }
@@ -911,7 +922,17 @@ export default {
       const prediction = predictValorant(left, right, roundsLine, bestOf, meta.coverage, elo, lineup);
       return json({ teamA: left.name, teamB: right.name, selectedMap: mapName, ...prediction, model: "Valorant time-aware map and series model", elo: { teamA: Math.round(elo.leftRating), teamB: Math.round(elo.rightRating), probabilityA: elo.probabilityA }, teamAContext: left, teamBContext: right, headToHead, meta, lineup: { confirmed: !!lineup, teamA: lineupA, teamB: lineupB, formA: lineupFormA, formB: lineupFormB }, draft: { teamA: draftAStats, teamB: draftBStats }, playerForm: { teamA: playerFormA, teamB: playerFormB } });
     }
-    if (url.pathname === "/api/latest-series") return json(await latestSeries(env.DB));
+    if (url.pathname === "/api/latest-series") {
+      const competitionValue = url.searchParams.get("competition")?.trim() ?? "";
+      const competition = competitionValue.length > 0 && competitionValue.length <= 160 ? competitionValue : undefined;
+      return json(await latestSeries(env.DB, { competition }));
+    }
+    if (url.pathname === "/api/competitions") {
+      const { results = [] } = await env.DB.prepare(
+        "SELECT COALESCE(stage,'Unknown competition') name,COUNT(*) maps FROM matches WHERE source_game_id LIKE 'oracle:%' AND played_at>='2022-01-01' GROUP BY COALESCE(stage,'Unknown competition') ORDER BY name",
+      ).all();
+      return json(results);
+    }
     if (url.pathname === "/api/match-history") {
       const teamId = Number(url.searchParams.get("team"));
       const opponentValue = url.searchParams.get("opponent");
@@ -919,7 +940,9 @@ export default {
       if (!Number.isInteger(teamId) || (opponentValue !== null && (!Number.isInteger(opponentId) || teamId === opponentId))) {
         return json({ error: "Select one team, or two distinct teams." }, 400);
       }
-      return json(await latestSeries(env.DB, { teamId, opponentId }));
+      const competitionValue = url.searchParams.get("competition")?.trim() ?? "";
+      const competition = competitionValue.length > 0 && competitionValue.length <= 160 ? competitionValue : undefined;
+      return json(await latestSeries(env.DB, { teamId, opponentId, competition }));
     }
     if (url.pathname === "/api/matchup") {
       const leftId = Number(url.searchParams.get("teamA"));
