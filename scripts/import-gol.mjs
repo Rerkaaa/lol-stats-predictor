@@ -119,6 +119,12 @@ function toRows(gameId, html, metadata) {
   return [base(blue, "100"), base(red, "200"), ...blueRows, ...redRows];
 }
 
+function linkedGameIds(html, gameId) {
+  const ids = new Set([String(gameId)]);
+  for (const match of html.matchAll(/game\/stats\/(\d+)\/page-game/gi)) ids.add(match[1]);
+  return [...ids];
+}
+
 const latestImported = dryRun ? null : await latestImportedDate();
 const candidates = [];
 for (let start = 0; candidates.length < maxGames && start < 1000; start += 10) {
@@ -139,11 +145,18 @@ if (!dryRun) {
 }
 
 const games = [];
+const parsedPageIds = new Set();
 for (const candidate of candidates.filter((game) => !knownIds.has(`gol:${game.id}`))) {
   const url = `https://gol.gg/game/stats/${candidate.id}/page-game/`;
   const html = await get(url);
-  const rows = toRows(candidate.id, html, candidate);
-  if (rows?.length >= 2) games.push({ gameId: `gol:${candidate.id}`, sourceHash: sha256(html), rows, url });
+  for (const gameId of linkedGameIds(html, candidate.id)) {
+    if (parsedPageIds.has(gameId)) continue;
+    parsedPageIds.add(gameId);
+    const pageHtml = gameId === candidate.id ? html : await get(`https://gol.gg/game/stats/${gameId}/page-game/`);
+    const rows = toRows(gameId, pageHtml, candidate);
+    if (rows?.length >= 2) games.push({ gameId: `gol:${gameId}`, sourceHash: sha256(pageHtml), rows, url: `https://gol.gg/game/stats/${gameId}/page-game/` });
+    if (gameId !== candidate.id) await delay(350);
+  }
   await delay(350);
 }
 
