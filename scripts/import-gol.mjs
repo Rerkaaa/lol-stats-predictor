@@ -71,7 +71,8 @@ function teamBlock(html, side) {
 }
 
 function teamFromBlock(block, side) {
-  const heading = block.match(/title='([^']+) stats'>([^<]+)<\/a>\s*-\s*(WIN|LOSS)/i);
+  if (!block) return null;
+  const heading = block.match(/title=['"]([^'"]+) stats['"][^>]*>([^<]+)<\/a>\s*-\s*(WIN|LOSS)/i);
   if (!heading) return null;
   const metric = (icon, fallback = 0) => {
     const match = block.match(new RegExp(`alt='${icon}'[\\s\\S]{0,120}?\\/>\\s*([0-9.]+k?)`, "i"));
@@ -103,7 +104,7 @@ function playersFromHtml(html, team, roles) {
 }
 
 function toRows(gameId, html, metadata) {
-  const durationMatch = html.match(/Game Time<br\/>\s*<h1>(\d+):(\d+)<\/h1>/i);
+  const durationMatch = html.match(/Game Time\s*<br\s*\/?>\s*<h1>\s*(\d+):(\d+)\s*<\/h1>/i);
   const patchMatch = html.match(/v(\d+\.\d+)/i);
   const blue = teamFromBlock(teamBlock(html, "blue"), "blue");
   const red = teamFromBlock(teamBlock(html, "red"), "red");
