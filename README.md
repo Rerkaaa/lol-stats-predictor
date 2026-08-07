@@ -2,6 +2,20 @@
 
 Hosted League of Legends matchup dashboard using Cloudflare Workers, D1, and static assets. GitHub stores code only; Oracle's Elixir 2022+ historical data is imported remotely into D1.
 
+The public interface is organized into three product areas:
+
+- **League of Legends:** predictor, latest imported matches, and schedule/live streams.
+- **Valorant:** predictor, latest imported series with map/player details, and live matches.
+- **Summoner Lookup:** cached Riot-ID profiles, ranks, mastery, recent form, and full match analysis.
+
+Team fields use substring search and keyboard-accessible suggestions rather than requiring exact dropdown navigation.
+
+Project documentation:
+
+- [Project changelog](CHANGELOG.md)
+- [Open work and prediction roadmap](ROADMAP.md)
+- [Monetization and promotion guide](MONETIZATION_GUIDE.md)
+
 ## Setup
 
 1. Apply D1 migrations and deploy the Worker.

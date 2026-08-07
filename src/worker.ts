@@ -819,11 +819,21 @@ async function valorantPlayerForm(db: D1Database, teamId: number) {
   return results;
 }
 
-async function latestValorantSeries(db: D1Database) {
-  const { results: series = [] } = await db.prepare(
+async function latestValorantSeries(db: D1Database, teamId?: number, opponentId?: number) {
+  const conditions: string[] = [], bindings: number[] = [];
+  if (teamId && opponentId) {
+    conditions.push("((s.team_a_id=? AND s.team_b_id=?) OR (s.team_a_id=? AND s.team_b_id=?))");
+    bindings.push(teamId, opponentId, opponentId, teamId);
+  } else if (teamId) {
+    conditions.push("(s.team_a_id=? OR s.team_b_id=?)");
+    bindings.push(teamId, teamId);
+  }
+  const statement = db.prepare(
     `SELECT s.id,s.played_at playedAt,s.event_name event,s.best_of bestOf,s.team_a_score teamAScore,s.team_b_score teamBScore,a.name teamA,b.name teamB,w.name winner
-     FROM valorant_series s JOIN valorant_teams a ON a.id=s.team_a_id JOIN valorant_teams b ON b.id=s.team_b_id LEFT JOIN valorant_teams w ON w.id=s.winner_team_id ORDER BY s.played_at DESC LIMIT 18`,
-  ).all<any>();
+     FROM valorant_series s JOIN valorant_teams a ON a.id=s.team_a_id JOIN valorant_teams b ON b.id=s.team_b_id LEFT JOIN valorant_teams w ON w.id=s.winner_team_id
+     ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""} ORDER BY s.played_at DESC LIMIT 30`,
+  );
+  const { results: series = [] } = bindings.length ? await statement.bind(...bindings).all<any>() : await statement.all<any>();
   if (!series.length) return [];
   const ids = series.map((row: any) => row.id);
   const { results: maps = [] } = await db.prepare(
@@ -1003,9 +1013,10 @@ export default {
       return json(await teamRoster(env.DB, teamId));
     }
     if (url.pathname === "/api/valorant/teams") {
+      const minimumMaps = url.searchParams.get("all") === "1" ? 1 : 3;
       const { results = [] } = await env.DB.prepare(
-        `SELECT t.id,t.name,COUNT(m.id) maps FROM valorant_teams t JOIN valorant_series s ON s.team_a_id=t.id OR s.team_b_id=t.id JOIN valorant_maps m ON m.series_id=s.id WHERE s.played_at>='2025-01-01' AND s.played_at<'2027-01-01' GROUP BY t.id,t.name HAVING maps>=3 ORDER BY t.name`,
-      ).all();
+        `SELECT t.id,t.name,COUNT(m.id) maps FROM valorant_teams t JOIN valorant_series s ON s.team_a_id=t.id OR s.team_b_id=t.id JOIN valorant_maps m ON m.series_id=s.id WHERE s.played_at>='2025-01-01' AND s.played_at<'2027-01-01' GROUP BY t.id,t.name HAVING maps>=? ORDER BY t.name`,
+      ).bind(minimumMaps).all();
       return json(results);
     }
     if (url.pathname === "/api/valorant/maps") {
@@ -1017,7 +1028,12 @@ export default {
       if (!Number.isInteger(teamId)) return json({ error: "Choose a team." }, 400);
       return json(await valorantRoster(env.DB, teamId));
     }
-    if (url.pathname === "/api/valorant/latest-series") return json(await latestValorantSeries(env.DB));
+    if (url.pathname === "/api/valorant/latest-series") {
+      const teamValue = url.searchParams.get("team"), opponentValue = url.searchParams.get("opponent");
+      const teamId = teamValue ? Number(teamValue) : undefined, opponentId = opponentValue ? Number(opponentValue) : undefined;
+      if ((teamValue && !Number.isInteger(teamId)) || (opponentValue && (!Number.isInteger(opponentId) || !teamId || opponentId === teamId))) return json({ error: "Select one team, or two distinct Valorant teams." }, 400);
+      return json(await latestValorantSeries(env.DB, teamId, opponentId));
+    }
     if (url.pathname === "/api/live-matches") {
       try {
         return json({ updatedAt: new Date().toISOString(), matches: await liveValorantMatches() });
