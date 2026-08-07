@@ -14,7 +14,6 @@ Project documentation:
 
 - [Project changelog](CHANGELOG.md)
 - [Open work and prediction roadmap](ROADMAP.md)
-- [Monetization and promotion guide](MONETIZATION_GUIDE.md)
 
 ## Setup
 

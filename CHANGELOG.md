@@ -14,7 +14,7 @@ This file records the major product and infrastructure changes made to the proje
 - Added a display-time repair for legacy mojibake characters still present in older generated frontend strings.
 - Kept the three primary product tabs visible while scrolling and added a responsive floating Back to top control for long pages.
 - Shifted the `LoL Stats` header brand 20 pixels right and added a subdued dark background for separation from the sticky header.
-- Added the project backlog, monetization guide, and this changelog.
+- Added the project backlog and this changelog.
 
 ## 2026-08-03 — Private development workspace
 
