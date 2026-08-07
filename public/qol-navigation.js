@@ -3,6 +3,18 @@
   stylesheet.rel = "stylesheet";
   stylesheet.href = "/qol-navigation.css?v=1";
   document.head.append(stylesheet);
+
+  const backToTop = document.createElement("button");
+  backToTop.id = "backToTop";
+  backToTop.className = "back-to-top";
+  backToTop.type = "button";
+  backToTop.setAttribute("aria-label", "Back to top");
+  backToTop.innerHTML = `<span aria-hidden="true">↑</span> Back to top`;
+  document.body.append(backToTop);
+  const updateBackToTop = () => backToTop.classList.toggle("visible", window.scrollY > Math.max(500, window.innerHeight * 0.75));
+  backToTop.addEventListener("click", () => window.scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }));
+  window.addEventListener("scroll", updateBackToTop, { passive: true });
+  updateBackToTop();
   if (location.hash === "#dev") return;
 
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
@@ -119,9 +131,12 @@
     nav.append(products, legacy);
 
     const header = document.querySelector("header");
+    const main = document.querySelector("main");
+    const siteNav = header.querySelector(".site-nav");
+    main.insertBefore(siteNav, header);
     const subnav = document.createElement("div");
     subnav.className = "product-subnav";
-    header.querySelector(".site-nav").insertAdjacentElement("afterend", subnav);
+    siteNav.insertAdjacentElement("afterend", subnav);
 
     const valorantLatest = document.createElement("section");
     valorantLatest.id = "valorantMatchesView";

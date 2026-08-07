@@ -12,6 +12,7 @@ This file records the major product and infrastructure changes made to the proje
 - Added a history-only Valorant team endpoint mode so teams with fewer than three maps remain searchable in match history without weakening predictor eligibility.
 - Applied a League blue-and-yellow visual treatment using `#ffe45c`, Valorant crimson styling, responsive navigation, mobile team search, and mobile match tables.
 - Added a display-time repair for legacy mojibake characters still present in older generated frontend strings.
+- Kept the three primary product tabs visible while scrolling and added a responsive floating Back to top control for long pages.
 - Added the project backlog, monetization guide, and this changelog.
 
 ## 2026-08-03 — Private development workspace
@@ -53,4 +54,3 @@ This file records the major product and infrastructure changes made to the proje
 - Replaced the original Gol.gg scraping direction with structured Oracle’s Elixir data for the historical LoL backbone.
 - Kept Gol.gg / Games of Legends-style HTML extraction only as a recent-data fallback where structured fields are incomplete.
 - Added idempotent imports so a source game is not inserted twice under the same source identifier.
-
