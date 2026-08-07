@@ -1,7 +1,7 @@
 (() => {
   const stylesheet = document.createElement("link");
   stylesheet.rel = "stylesheet";
-  stylesheet.href = "/qol-navigation.css?v=1";
+  stylesheet.href = "/qol-navigation.css?v=2";
   document.head.append(stylesheet);
 
   const backToTop = document.createElement("button");

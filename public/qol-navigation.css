@@ -8,6 +8,7 @@
 
 .legacy-navigation { display: none !important; }
 .site-nav { position: sticky; top: 0; z-index: 120; padding: 12px 0; background: #071225f2; backdrop-filter: blur(14px); box-shadow: 0 12px 30px #02071455; }
+.site-nav .brand { margin-left: 20px; padding: 8px 12px; border: 1px solid #203957; border-radius: 10px; background: #0b1a2fd9; color: #cbd8e8; box-shadow: inset 0 1px 0 #ffffff0a; }
 .product-navigation { display: flex; gap: 10px; align-items: center; }
 .product-tab { min-height: 44px; padding: 10px 16px; border: 1px solid #345b89; background: #102542; color: #dcecff; }
 .product-tab[data-product="lol"] { background: var(--lol-blue); color: var(--lol-yellow); border-color: #2f70ba; }
